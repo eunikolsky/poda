@@ -25,7 +25,11 @@ dependencies:
 library:
   source-dirs: src
   dependencies:
+  - aeson
+  - bytestring
+  - http-client
   - http-client-tls
+  - text
 
 executables:
   poda-exe:
