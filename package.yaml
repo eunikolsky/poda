@@ -29,7 +29,12 @@ library:
   - bytestring
   - http-client
   - http-client-tls
+  - http-types
+  - mtl
+  - persistent
+  - persistent-sqlite
   - text
+  - time
 
 executables:
   poda-exe:
