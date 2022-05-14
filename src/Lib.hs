@@ -92,19 +92,20 @@ cachedHTTPLbs req mgr = runSqlite dbPath $ do
 
   resp <- liftIO $ httpLbs reqWithCache mgr
 
-  now <- liftIO getCurrentTime
   let upsert = maybe insert_ (replace . entityKey) maybeCachedResponse
       eTag = lookup "ETag" $ responseHeaders resp
       lastModified = lookup "Last-Modified" $ responseHeaders resp
       hasETagOrLastModified = isJust eTag || isJust lastModified
-  when (statusIsSuccessful (responseStatus resp) || hasETagOrLastModified) . upsert
-    $ CachedResponse
+  when (statusIsSuccessful (responseStatus resp) || hasETagOrLastModified) $ do
+    now <- liftIO getCurrentTime
+    upsert $ CachedResponse
       { cachedResponseUrl = url
       , cachedResponseData = BL.toStrict $ responseBody resp
       , cachedResponseETag = decodeUtf8 <$> eTag
       , cachedResponseLastModified = lastModified >>= parseLastModified
       , cachedResponseCreated = now
       }
+
   return resp
 
 applyCachedResponse :: Maybe CachedResponse -> Request -> Request
