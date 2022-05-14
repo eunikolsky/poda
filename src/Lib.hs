@@ -21,7 +21,7 @@ import Control.Monad.IO.Class
 import Control.Monad.Reader
 import Data.Aeson
 import Data.ByteString (ByteString)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Data.Time
@@ -91,14 +91,18 @@ cachedHTTPLbs req mgr = runSqlite dbPath $ do
   let reqWithCache = applyCachedResponse (entityVal <$> maybeCachedResponse) req
 
   resp <- liftIO $ httpLbs reqWithCache mgr
+
   now <- liftIO getCurrentTime
   let upsert = maybe insert_ (replace . entityKey) maybeCachedResponse
-  when (statusIsSuccessful $ responseStatus resp) . upsert
+      eTag = lookup "ETag" $ responseHeaders resp
+      lastModified = lookup "Last-Modified" $ responseHeaders resp
+      hasETagOrLastModified = isJust eTag || isJust lastModified
+  when (statusIsSuccessful (responseStatus resp) || hasETagOrLastModified) . upsert
     $ CachedResponse
       { cachedResponseUrl = url
       , cachedResponseData = BL.toStrict $ responseBody resp
-      , cachedResponseETag = decodeUtf8 <$> lookup "ETag" (responseHeaders resp)
-      , cachedResponseLastModified = lookup "Last-Modified" (responseHeaders resp) >>= parseLastModified
+      , cachedResponseETag = decodeUtf8 <$> eTag
+      , cachedResponseLastModified = lastModified >>= parseLastModified
       , cachedResponseCreated = now
       }
   return resp
