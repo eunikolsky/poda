@@ -56,14 +56,14 @@ githubToken = getEnv "GH_TOKEN"
 newtype Repo = Repo String
   deriving Show
 
-data PR = PR
+data Pull = Pull
   { id :: Int
   , title :: Text
   , url :: Text
   }
   deriving (Generic, Show)
 
-instance FromJSON PR
+instance FromJSON Pull
 
 listPRs :: Repo -> IO ()
 listPRs (Repo repo) = do
@@ -71,7 +71,7 @@ listPRs (Repo repo) = do
   request <- githubRequest . APIPath . mconcat $ ["/repos/", repo, "/pulls?per_page=5"]
   response <- cachedHTTPLbs request manager
 
-  let prs :: [PR] = fromMaybe [] . decode $ response
+  let prs :: [Pull] = fromMaybe [] . decode $ response
   mapM_ print prs
 
 newtype APIPath = APIPath String
