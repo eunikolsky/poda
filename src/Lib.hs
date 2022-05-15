@@ -5,6 +5,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
@@ -47,7 +48,20 @@ share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
     created UTCTime default=CURRENT_TIME
     UniqueURL url sql=unique_url
     deriving Show
+
+  Pull
+    number Int
+    title Text
+    url Text
+    deriving Show
 |]
+
+instance FromJSON Pull where
+  parseJSON = withObject "PR" $ \v -> do
+    pullNumber <- v .: "number"
+    pullTitle <- v .: "title"
+    pullUrl <- v .: "url"
+    pure $ Pull { pullNumber, pullTitle, pullUrl }
 
 githubToken :: IO String
 githubToken = getEnv "GH_TOKEN"
@@ -55,15 +69,6 @@ githubToken = getEnv "GH_TOKEN"
 -- | Contains `owner/repo`.
 newtype Repo = Repo String
   deriving Show
-
-data Pull = Pull
-  { id :: Int
-  , title :: Text
-  , url :: Text
-  }
-  deriving (Generic, Show)
-
-instance FromJSON Pull
 
 listPRs :: Repo -> IO ()
 listPRs (Repo repo) = do
