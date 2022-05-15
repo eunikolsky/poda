@@ -11,6 +11,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 
@@ -111,11 +112,10 @@ cachedHTTPLbs req mgr = runSqlite dbPath $ do
 applyCachedResponse :: Maybe CachedResponse -> Request -> Request
 applyCachedResponse Nothing req = req
 applyCachedResponse (Just cachedResponse) req = req
-  { requestHeaders = requestHeaders req ++
-    [ ("If-None-Match", maybe "" encodeUtf8 (cachedResponseETag cachedResponse))
-    , ("If-Modified-Since", maybe "" (C.pack . formatTime defaultTimeLocale rfc2616DateFormat) (cachedResponseLastModified cachedResponse))
-    ]
-  }
+  { requestHeaders = requestHeaders req <> ifNoneMatch <> ifModifiedSince }
+  where
+    ifNoneMatch = maybe [] (pure . ("If-None-Match",) . encodeUtf8) (cachedResponseETag cachedResponse)
+    ifModifiedSince = maybe [] (pure . ("If-Modified-Since",) . C.pack . formatTime defaultTimeLocale rfc2616DateFormat) (cachedResponseLastModified cachedResponse)
 
 parseLastModified :: ByteString -> Maybe UTCTime
 parseLastModified = parseTimeM False defaultTimeLocale rfc2616DateFormat . C.unpack
