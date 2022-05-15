@@ -63,8 +63,17 @@ instance FromJSON Pull where
     pullUrl <- v .: "url"
     pure $ Pull { pullNumber, pullTitle, pullUrl }
 
-githubToken :: IO String
-githubToken = getEnv "GH_TOKEN"
+-- | Configuration information for the program.
+data Config = Config
+  { configToken :: String
+    -- ^ GitHub token
+  }
+  deriving (Generic, Show)
+
+instance FromJSON Config
+
+config :: IO Config
+config = fromJust <$> decodeFileStrict' "config.json"
 
 -- | Contains `owner/repo`.
 newtype Repo = Repo String
@@ -132,7 +141,7 @@ migrateDB = runSqlite dbPath $ runMigration migrateAll
 
 githubRequest :: APIPath -> IO Request
 githubRequest (APIPath apiPath) = do
-  token <- githubToken
+  token <- configToken <$> config
   request <- parseRequest $ mconcat ["https://api.github.com", apiPath]
   pure $ request { requestHeaders =
     [ ("accept", "application/vnd.github.v3+json")
