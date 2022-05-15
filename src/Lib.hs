@@ -34,6 +34,7 @@ import Network.HTTP.Client
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types
 import System.Environment (getEnv)
+import System.IO.Unsafe (unsafePerformIO)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
@@ -53,6 +54,9 @@ share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
     number Int
     title Text
     url Text
+    author Text
+    created UTCTime
+    UniqueNumber number
     deriving Show
 |]
 
@@ -61,19 +65,26 @@ instance FromJSON Pull where
     pullNumber <- v .: "number"
     pullTitle <- v .: "title"
     pullUrl <- v .: "url"
-    pure $ Pull { pullNumber, pullTitle, pullUrl }
+    pullAuthor <- v .: "user" >>= (.: "login")
+    pullCreated <- v .: "created_at"
+    pure $ Pull { pullNumber, pullTitle, pullUrl, pullAuthor, pullCreated }
 
 -- | Configuration information for the program.
 data Config = Config
   { configToken :: String
     -- ^ GitHub token
+  , configLocalTeam :: [Text]
+    -- ^ Github names of our team
   }
   deriving (Generic, Show)
 
 instance FromJSON Config
 
-config :: IO Config
-config = fromJust <$> decodeFileStrict' "config.json"
+-- | The current config. Technically it requires `IO`, but for now we expect to always have
+-- a valid @config.json@ file — this is easier for faster development.
+config :: Config
+{-# NOINLINE config #-}
+config = unsafePerformIO $ fromJust <$> decodeFileStrict' "config.json"
 
 -- | Contains `owner/repo`.
 newtype Repo = Repo String
@@ -82,11 +93,19 @@ newtype Repo = Repo String
 listPRs :: Repo -> IO ()
 listPRs (Repo repo) = do
   manager <- newManager tlsManagerSettings
-  request <- githubRequest . APIPath . mconcat $ ["/repos/", repo, "/pulls?per_page=5"]
+  request <- githubRequest . APIPath . mconcat $ ["/repos/", repo, "/pulls?per_page=50"]
   response <- cachedHTTPLbs request manager
 
-  let prs :: [Pull] = fromMaybe [] . decode $ response
+  let prs :: [Pull] = filter fromOurTeam . fromMaybe [] . decode $ response
   mapM_ print prs
+
+  runSqlite dbPath $ do
+    alreadyAddedPulls <- selectList [] []
+    let alreadyAddedNumbers = pullNumber . entityVal <$> alreadyAddedPulls
+    insertMany_ $ filter (not . (`elem` alreadyAddedNumbers) . pullNumber) prs
+
+fromOurTeam :: Pull -> Bool
+fromOurTeam Pull { pullAuthor } = pullAuthor `elem` configLocalTeam config
 
 newtype APIPath = APIPath String
   deriving Show
@@ -141,7 +160,7 @@ migrateDB = runSqlite dbPath $ runMigration migrateAll
 
 githubRequest :: APIPath -> IO Request
 githubRequest (APIPath apiPath) = do
-  token <- configToken <$> config
+  let token = configToken config
   request <- parseRequest $ mconcat ["https://api.github.com", apiPath]
   pure $ request { requestHeaders =
     [ ("accept", "application/vnd.github.v3+json")
