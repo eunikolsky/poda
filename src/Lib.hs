@@ -22,7 +22,7 @@ import Control.Monad.IO.Class
 import Control.Monad.Reader
 import Data.Aeson
 import Data.ByteString (ByteString)
-import Data.Maybe (fromMaybe, isJust)
+import Data.Maybe (fromJust, fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Data.Time
@@ -71,13 +71,8 @@ listPRs (Repo repo) = do
   request <- githubRequest . APIPath . mconcat $ ["/repos/", repo, "/pulls?per_page=5"]
   response <- cachedHTTPLbs request manager
 
-  let prs :: [PR] = fromMaybe [] . decode $ responseBody response
+  let prs :: [PR] = fromMaybe [] . decode $ response
   mapM_ print prs
-
-  putStrLn ""
-  print $ responseStatus response
-  forM_ (responseHeaders response) $ \(name, value) ->
-    putStrLn $ mconcat [show name, ": ", C.unpack value]
 
 newtype APIPath = APIPath String
   deriving Show
@@ -85,7 +80,7 @@ newtype APIPath = APIPath String
 dbPath :: Text
 dbPath = "cache.sqlite"
 
-cachedHTTPLbs :: Request -> Manager -> IO (Response BL.ByteString)
+cachedHTTPLbs :: Request -> Manager -> IO BL.ByteString
 cachedHTTPLbs req mgr = runSqlite dbPath $ do
   let url = T.pack . show . getUri $ req
   maybeCachedResponse <- selectFirst [CachedResponseUrl ==. url] []
@@ -97,17 +92,21 @@ cachedHTTPLbs req mgr = runSqlite dbPath $ do
       eTag = lookup "ETag" $ responseHeaders resp
       lastModified = lookup "Last-Modified" $ responseHeaders resp
       hasETagOrLastModified = isJust eTag || isJust lastModified
-  when (statusIsSuccessful (responseStatus resp) || hasETagOrLastModified) $ do
-    now <- liftIO getCurrentTime
-    upsert $ CachedResponse
-      { cachedResponseUrl = url
-      , cachedResponseData = BL.toStrict $ responseBody resp
-      , cachedResponseETag = decodeUtf8 <$> eTag
-      , cachedResponseLastModified = lastModified >>= parseLastModified
-      , cachedResponseCreated = now
-      }
 
-  return resp
+  if responseStatus resp == notModified304
+    then pure . BL.fromStrict . cachedResponseData . entityVal . fromJust $ maybeCachedResponse
+    else do
+      when (statusIsSuccessful (responseStatus resp) && hasETagOrLastModified) $ do
+        now <- liftIO getCurrentTime
+        upsert $ CachedResponse
+          { cachedResponseUrl = url
+          , cachedResponseData = BL.toStrict $ responseBody resp
+          , cachedResponseETag = decodeUtf8 <$> eTag
+          , cachedResponseLastModified = lastModified >>= parseLastModified
+          , cachedResponseCreated = now
+          }
+
+      pure $ responseBody resp
 
 applyCachedResponse :: Maybe CachedResponse -> Request -> Request
 applyCachedResponse Nothing req = req
