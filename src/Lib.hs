@@ -23,7 +23,8 @@ import Control.Monad.IO.Class
 import Control.Monad.Reader
 import Data.Aeson
 import Data.ByteString (ByteString)
-import Data.Maybe (fromJust, fromMaybe, isJust)
+import Data.List
+import Data.Maybe
 import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Data.Time
@@ -44,6 +45,7 @@ share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
   CachedResponse
     url Text
     data ByteString
+    nextLink Text Maybe
     eTag Text Maybe sql=etag
     lastModified UTCTime Maybe
     created UTCTime default=CURRENT_TIME
@@ -56,6 +58,7 @@ share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
     url Text
     author Text
     created UTCTime
+    merged UTCTime Maybe
     UniqueNumber number
     deriving Show
 |]
@@ -64,10 +67,11 @@ instance FromJSON Pull where
   parseJSON = withObject "PR" $ \v -> do
     pullNumber <- v .: "number"
     pullTitle <- v .: "title"
-    pullUrl <- v .: "url"
+    pullUrl <- v .: "pull_request" >>= (.: "url")
     pullAuthor <- v .: "user" >>= (.: "login")
     pullCreated <- v .: "created_at"
-    pure $ Pull { pullNumber, pullTitle, pullUrl, pullAuthor, pullCreated }
+    pullMerged <- v .: "pull_request" >>= (.: "merged_at")
+    pure $ Pull { pullNumber, pullTitle, pullUrl, pullAuthor, pullCreated, pullMerged }
 
 -- | Configuration information for the program.
 data Config = Config
@@ -87,16 +91,25 @@ config :: Config
 config = unsafePerformIO $ fromJust <$> decodeFileStrict' "config.json"
 
 -- | Contains `owner/repo`.
-newtype Repo = Repo String
+newtype Repo = Repo Text
   deriving Show
 
-listPRs :: Repo -> IO ()
-listPRs (Repo repo) = do
-  manager <- newManager tlsManagerSettings
-  request <- githubRequest . APIPath . mconcat $ ["/repos/", repo, "/pulls?per_page=50"]
-  response <- cachedHTTPLbs request manager
+newtype Labels = Labels [Text]
 
-  let prs :: [Pull] = filter fromOurTeam . fromMaybe [] . decode $ response
+listPRs :: Repo -> Labels -> IO ()
+listPRs (Repo repo) (Labels labels) = do
+  manager <- newManager tlsManagerSettings
+
+  let link = GithubPath . mconcat $ ["https://api.github.com/repos/", repo, "/issues?per_page=100&state=all&labels=", T.intercalate "," labels]
+  prs :: [Pull] <- flip unfoldrM link $ \link -> do
+    request <- githubRequest link
+    response <- cachedHTTPLbs request manager
+
+    pure
+      ( filter fromOurTeam . fromMaybe [] . decode . httpRData $ response
+      , GithubPath <$> httpRNextLink response
+      )
+
   mapM_ print prs
 
   runSqlite dbPath $ do
@@ -107,17 +120,23 @@ listPRs (Repo repo) = do
 fromOurTeam :: Pull -> Bool
 fromOurTeam Pull { pullAuthor } = pullAuthor `elem` configLocalTeam config
 
-newtype APIPath = APIPath String
+newtype GithubPath = GithubPath Text
   deriving Show
 
 dbPath :: Text
 dbPath = "cache.sqlite"
 
-cachedHTTPLbs :: Request -> Manager -> IO BL.ByteString
+data HTTPResponse = HTTPResponse
+  { httpRData :: BL.ByteString
+  , httpRNextLink :: Maybe Text
+  }
+
+cachedHTTPLbs :: Request -> Manager -> IO HTTPResponse
 cachedHTTPLbs req mgr = runSqlite dbPath $ do
   let url = T.pack . show . getUri $ req
   maybeCachedResponse <- selectFirst [CachedResponseUrl ==. url] []
   let reqWithCache = applyCachedResponse (entityVal <$> maybeCachedResponse) req
+  liftIO . putStrLn $ mconcat ["URL ", T.unpack url, " etag: ", maybe "N/A" show (maybeCachedResponse >>= cachedResponseETag . entityVal)]
 
   resp <- liftIO $ httpLbs reqWithCache mgr
 
@@ -127,19 +146,30 @@ cachedHTTPLbs req mgr = runSqlite dbPath $ do
       hasETagOrLastModified = isJust eTag || isJust lastModified
 
   if responseStatus resp == notModified304
-    then pure . BL.fromStrict . cachedResponseData . entityVal . fromJust $ maybeCachedResponse
+    then let cachedResponse = entityVal . fromJust $ maybeCachedResponse
+      in pure $ HTTPResponse
+        { httpRData = BL.fromStrict . cachedResponseData $ cachedResponse
+        , httpRNextLink = cachedResponseNextLink cachedResponse
+        }
+
     else do
+      let nextLink = lookup "Link" (responseHeaders resp) >>= parseRelLink "next" . decodeUtf8
+
       when (statusIsSuccessful (responseStatus resp) && hasETagOrLastModified) $ do
         now <- liftIO getCurrentTime
         upsert $ CachedResponse
           { cachedResponseUrl = url
           , cachedResponseData = BL.toStrict $ responseBody resp
+          , cachedResponseNextLink = nextLink
           , cachedResponseETag = decodeUtf8 <$> eTag
           , cachedResponseLastModified = lastModified >>= parseLastModified
           , cachedResponseCreated = now
           }
 
-      pure $ responseBody resp
+      pure $ HTTPResponse
+        { httpRData = responseBody resp
+        , httpRNextLink = nextLink
+        }
 
 applyCachedResponse :: Maybe CachedResponse -> Request -> Request
 applyCachedResponse Nothing req = req
@@ -158,15 +188,35 @@ rfc2616DateFormat = "%a, %d %b %Y %T GMT"
 migrateDB :: IO ()
 migrateDB = runSqlite dbPath $ runMigration migrateAll
 
-githubRequest :: APIPath -> IO Request
-githubRequest (APIPath apiPath) = do
+githubRequest :: GithubPath -> IO Request
+githubRequest (GithubPath githubPath) = do
   let token = configToken config
-  request <- parseRequest $ mconcat ["https://api.github.com", apiPath]
+  request <- parseRequest . T.unpack $ githubPath
   pure $ request { requestHeaders =
     [ ("accept", "application/vnd.github.v3+json")
     , ("authorization", mconcat ["token ", C.pack token])
     , ("user-agent", "eunikolsky/poda")
     ] }
+
+parseRelLink :: Text -> Text -> Maybe Text
+parseRelLink rel text = findRel rel rels
+  where
+    findRel rel = safeHead . mapMaybe (isRel rel)
+    isRel rel = (\[url, r] -> if r == "rel=\"" <> rel <> "\""
+      then T.stripPrefix "<" =<< T.stripSuffix ">" url
+      else Nothing) . T.splitOn "; "
+    rels = filter (not . T.null) . T.splitOn ", " $ text
+
+safeHead :: [a] -> Maybe a
+safeHead = listToMaybe
+
+unfoldrM :: (Monoid a, Monad m) => (b -> m (a, Maybe b)) -> b -> m a
+unfoldrM f = iter mempty
+  where
+    iter acc x = do
+      (a, next) <- f x
+      let newAcc = acc <> a
+      maybe (pure newAcc) (iter newAcc) next
 
 someFunc :: IO ()
 someFunc = putStrLn "someFunc"
