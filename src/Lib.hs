@@ -110,13 +110,23 @@ listPRs (Repo repo) (Labels labels) = do
       , GithubPath <$> httpRNextLink response
       )
 
-  mapM_ print prs
+  printPRs prs
 
   runSqlite dbPath $ do
     -- delete all existing PRs first so that the uniqueness constraint doesn't block the insert;
     -- older PRs can't be lost because we always get the list of all PRs above
     deleteWhere ([] :: [Filter Pull])
     insertMany_ prs
+
+printPRs :: [Pull] -> IO ()
+printPRs prs = printAll >> printRemaining
+  where
+    printCount = 5
+    printAll = mapM_ print $ take printCount prs
+    printRemaining = putStrLn $ mconcat ["and ", show $ (length prs - printCount) `noLessThan` 0, " more…"]
+
+noLessThan :: Ord a => a -> a -> a
+noLessThan = max
 
 fromOurTeam :: Pull -> Bool
 fromOurTeam Pull { pullAuthor } = pullAuthor `elem` configLocalTeam config
