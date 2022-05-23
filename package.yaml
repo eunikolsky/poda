@@ -27,6 +27,7 @@ library:
   dependencies:
   - aeson
   - bytestring
+  - cassava
   - http-client
   - http-client-tls
   - http-types

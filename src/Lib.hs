@@ -23,11 +23,13 @@ import Control.Monad.IO.Class
 import Control.Monad.Reader
 import Data.Aeson
 import Data.ByteString (ByteString)
+import Data.Csv (DefaultOrdered, ToField, ToNamedRecord, header, headerOrder, namedRecord, toField, toNamedRecord)
 import Data.List
 import Data.Maybe
 import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Data.Time
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Database.Persist.Sqlite
 import Database.Persist.TH
 import GHC.Generics
@@ -39,6 +41,7 @@ import System.IO.Unsafe (unsafePerformIO)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
+import qualified Data.Csv as CSV ((.=))
 import qualified Data.Text as T
 
 share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
@@ -73,6 +76,35 @@ instance FromJSON Pull where
     pullMerged <- v .: "pull_request" >>= (.: "merged_at")
     pure $ Pull { pullNumber, pullTitle, pullUrl, pullAuthor, pullCreated, pullMerged }
 
+data PullAnalysis = PullAnalysis
+  { pullAnalysisPull :: Pull
+  , pullAnalysisOpenTime :: Maybe NominalDiffTime
+  -- ^ Amount of time the PR was open (if merged). This is the time from open to merge time,
+  -- regardless of any time it might have been closed in between.
+  }
+  deriving Show
+
+instance ToField UTCTime where
+  toField = C.pack . iso8601Show
+
+-- | This allows to encode a @NominalDiffTime@ value into a CSV record.
+instance ToField NominalDiffTime where
+  toField = C.pack . show . truncate . realToFrac
+
+instance ToNamedRecord PullAnalysis where
+  toNamedRecord PullAnalysis { pullAnalysisPull = p, pullAnalysisOpenTime } = namedRecord
+    [ "number" CSV..= pullNumber p
+    , "title" CSV..= pullTitle p
+    , "url" CSV..= pullUrl p
+    , "author" CSV..= pullAuthor p
+    , "created" CSV..= pullCreated p
+    , "merged" CSV..= pullMerged p
+    , "open_time" CSV..= pullAnalysisOpenTime
+    ]
+
+instance DefaultOrdered PullAnalysis where
+  headerOrder _ = header ["number", "title", "url", "author", "created", "merged", "open_time"]
+
 -- | Configuration information for the program.
 data Config = Config
   { configToken :: String
@@ -96,7 +128,7 @@ newtype Repo = Repo Text
 
 newtype Labels = Labels [Text]
 
-listPRs :: Repo -> Labels -> IO ()
+listPRs :: Repo -> Labels -> IO [Pull]
 listPRs (Repo repo) (Labels labels) = do
   manager <- newManager tlsManagerSettings
 
@@ -117,6 +149,17 @@ listPRs (Repo repo) (Labels labels) = do
     -- older PRs can't be lost because we always get the list of all PRs above
     deleteWhere ([] :: [Filter Pull])
     insertMany_ prs
+
+  pure prs
+
+analyzePRs :: [Pull] -> [PullAnalysis]
+analyzePRs = fmap analyze
+  where
+    analyze :: Pull -> PullAnalysis
+    analyze pull@Pull { pullCreated, pullMerged } = PullAnalysis
+      { pullAnalysisPull = pull
+      , pullAnalysisOpenTime = (`diffUTCTime` pullCreated) <$> pullMerged
+      }
 
 printPRs :: [Pull] -> IO ()
 printPRs prs = printAll >> printRemaining
