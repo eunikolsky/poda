@@ -113,9 +113,10 @@ listPRs (Repo repo) (Labels labels) = do
   mapM_ print prs
 
   runSqlite dbPath $ do
-    alreadyAddedPulls <- selectList [] []
-    let alreadyAddedNumbers = pullNumber . entityVal <$> alreadyAddedPulls
-    insertMany_ $ filter (not . (`elem` alreadyAddedNumbers) . pullNumber) prs
+    -- delete all existing PRs first so that the uniqueness constraint doesn't block the insert;
+    -- older PRs can't be lost because we always get the list of all PRs above
+    deleteWhere ([] :: [Filter Pull])
+    insertMany_ prs
 
 fromOurTeam :: Pull -> Bool
 fromOurTeam Pull { pullAuthor } = pullAuthor `elem` configLocalTeam config
