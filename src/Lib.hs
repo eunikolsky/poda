@@ -36,8 +36,6 @@ import GHC.Generics
 import Network.HTTP.Client
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types
-import System.Environment (getEnv)
-import System.IO.Unsafe (unsafePerformIO)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
@@ -120,12 +118,6 @@ data Config = Config
 
 instance FromJSON Config
 
--- | The current config. Technically it requires `IO`, but for now we expect to always have
--- a valid @config.json@ file — this is easier for faster development.
-config :: Config
-{-# NOINLINE config #-}
-config = unsafePerformIO $ fromJust <$> decodeFileStrict' "config.json"
-
 -- | Contains `owner/repo`.
 newtype Repo = Repo { unRepo :: Text }
   deriving Show
@@ -133,8 +125,8 @@ newtype Repo = Repo { unRepo :: Text }
 instance FromJSON Repo where
   parseJSON = fmap Repo . parseJSON
 
-listPRs :: IO [Pull]
-listPRs = do
+listPRs :: Config -> IO [Pull]
+listPRs config = do
   manager <- newManager tlsManagerSettings
 
   let { link = GithubPath . mconcat $
@@ -143,11 +135,11 @@ listPRs = do
     ]
   }
   prs :: [Pull] <- flip unfoldrM link $ \link -> do
-    request <- githubRequest link
+    request <- githubRequest config link
     response <- cachedHTTPLbs request manager
 
     pure
-      ( filter fromOurTeam . fromMaybe [] . decode . httpRData $ response
+      ( filter (fromOurTeam config) . fromMaybe [] . decode . httpRData $ response
       , GithubPath <$> httpRNextLink response
       )
 
@@ -180,8 +172,8 @@ printPRs prs = printAll >> printRemaining
 noLessThan :: Ord a => a -> a -> a
 noLessThan = max
 
-fromOurTeam :: Pull -> Bool
-fromOurTeam Pull { pullAuthor } = pullAuthor `elem` configLocalTeam config
+fromOurTeam :: Config -> Pull -> Bool
+fromOurTeam config Pull { pullAuthor } = pullAuthor `elem` configLocalTeam config
 
 newtype GithubPath = GithubPath Text
   deriving Show
@@ -251,8 +243,8 @@ rfc2616DateFormat = "%a, %d %b %Y %T GMT"
 migrateDB :: IO ()
 migrateDB = runSqlite dbPath $ runMigration migrateAll
 
-githubRequest :: GithubPath -> IO Request
-githubRequest (GithubPath githubPath) = do
+githubRequest :: Config -> GithubPath -> IO Request
+githubRequest config (GithubPath githubPath) = do
   let token = configToken config
   request <- parseRequest . T.unpack $ githubPath
   pure $ request { requestHeaders =
