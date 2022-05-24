@@ -21,13 +21,13 @@ description:         Please see the README on GitHub at <https://github.com/gith
 
 dependencies:
 - base >= 4.7 && < 5
+- bytestring
+- cassava
 
 library:
   source-dirs: src
   dependencies:
   - aeson
-  - bytestring
-  - cassava
   - http-client
   - http-client-tls
   - http-types
@@ -38,7 +38,7 @@ library:
   - time
 
 executables:
-  poda-exe:
+  poda:
     main:                Main.hs
     source-dirs:         app
     ghc-options:

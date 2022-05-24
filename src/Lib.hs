@@ -111,6 +111,10 @@ data Config = Config
     -- ^ GitHub token
   , configLocalTeam :: [Text]
     -- ^ Github names of our team
+  , configRepo :: Repo
+    -- ^ Repository to analyze
+  , configLabel :: Text
+    -- ^ Only PRs with this label are analyzed
   }
   deriving (Generic, Show)
 
@@ -123,16 +127,21 @@ config :: Config
 config = unsafePerformIO $ fromJust <$> decodeFileStrict' "config.json"
 
 -- | Contains `owner/repo`.
-newtype Repo = Repo Text
+newtype Repo = Repo { unRepo :: Text }
   deriving Show
 
-newtype Labels = Labels [Text]
+instance FromJSON Repo where
+  parseJSON = fmap Repo . parseJSON
 
-listPRs :: Repo -> Labels -> IO [Pull]
-listPRs (Repo repo) (Labels labels) = do
+listPRs :: IO [Pull]
+listPRs = do
   manager <- newManager tlsManagerSettings
 
-  let link = GithubPath . mconcat $ ["https://api.github.com/repos/", repo, "/issues?per_page=100&state=all&labels=", T.intercalate "," labels]
+  let { link = GithubPath . mconcat $
+    [ "https://api.github.com/repos/", unRepo . configRepo $ config
+    , "/issues?per_page=100&state=all&labels=", configLabel config
+    ]
+  }
   prs :: [Pull] <- flip unfoldrM link $ \link -> do
     request <- githubRequest link
     response <- cachedHTTPLbs request manager
@@ -142,7 +151,7 @@ listPRs (Repo repo) (Labels labels) = do
       , GithubPath <$> httpRNextLink response
       )
 
-  printPRs prs
+  -- printPRs prs
 
   runSqlite dbPath $ do
     -- delete all existing PRs first so that the uniqueness constraint doesn't block the insert;
@@ -190,7 +199,7 @@ cachedHTTPLbs req mgr = runSqlite dbPath $ do
   let url = T.pack . show . getUri $ req
   maybeCachedResponse <- selectFirst [CachedResponseUrl ==. url] []
   let reqWithCache = applyCachedResponse (entityVal <$> maybeCachedResponse) req
-  liftIO . putStrLn $ mconcat ["URL ", T.unpack url, " etag: ", maybe "N/A" show (maybeCachedResponse >>= cachedResponseETag . entityVal)]
+  -- liftIO . putStrLn $ mconcat ["URL ", T.unpack url, " etag: ", maybe "N/A" show (maybeCachedResponse >>= cachedResponseETag . entityVal)]
 
   resp <- liftIO $ httpLbs reqWithCache mgr
 
@@ -271,6 +280,3 @@ unfoldrM f = iter mempty
       (a, next) <- f x
       let newAcc = acc <> a
       maybe (pure newAcc) (iter newAcc) next
-
-someFunc :: IO ()
-someFunc = putStrLn "someFunc"

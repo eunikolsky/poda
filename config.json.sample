@@ -1,4 +1,6 @@
 {
+  "configLabel": "",
   "configLocalTeam": [],
+  "configRepo": "user/repo",
   "configToken": "<INSERT_TOKEN_HERE>"
 }
