@@ -67,7 +67,7 @@ instance FromJSON Pull where
   parseJSON = withObject "PR" $ \v -> do
     pullNumber <- v .: "number"
     pullTitle <- v .: "title"
-    pullUrl <- v .: "pull_request" >>= (.: "url")
+    pullUrl <- v .: "pull_request" >>= (.: "html_url")
     pullAuthor <- v .: "user" >>= (.: "login")
     pullCreated <- v .: "created_at"
     pullMerged <- v .: "pull_request" >>= (.: "merged_at")
