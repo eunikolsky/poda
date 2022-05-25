@@ -21,9 +21,9 @@ module Lib where
 import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Reader
-import Data.Aeson
+import Data.Aeson hiding ((.=))
 import Data.ByteString (ByteString)
-import Data.Csv (DefaultOrdered, ToField, ToNamedRecord, header, headerOrder, namedRecord, toField, toNamedRecord)
+import Data.Csv ((.=), DefaultOrdered, ToField, ToNamedRecord, header, headerOrder, namedRecord, toField, toNamedRecord)
 import Data.List
 import Data.Maybe
 import Data.Text (Text)
@@ -39,7 +39,6 @@ import Network.HTTP.Types
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
-import qualified Data.Csv as CSV ((.=))
 import qualified Data.Text as T
 
 share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
@@ -76,7 +75,7 @@ instance FromJSON Pull where
 
 data PullAnalysis = PullAnalysis
   { pullAnalysisPull :: Pull
-  , pullAnalysisOpenTime :: Maybe NominalDiffTime
+  , pullAnalysisOpenTime :: Maybe (NominalDiffTime, WorkDiffTime)
   -- ^ Amount of time the PR was open (if merged). This is the time from open to merge time,
   -- regardless of any time it might have been closed in between.
   }
@@ -91,17 +90,18 @@ instance ToField NominalDiffTime where
 
 instance ToNamedRecord PullAnalysis where
   toNamedRecord PullAnalysis { pullAnalysisPull = p, pullAnalysisOpenTime } = namedRecord
-    [ "number" CSV..= pullNumber p
-    , "title" CSV..= pullTitle p
-    , "url" CSV..= pullUrl p
-    , "author" CSV..= pullAuthor p
-    , "created" CSV..= pullCreated p
-    , "merged" CSV..= pullMerged p
-    , "open_time" CSV..= pullAnalysisOpenTime
+    [ "number" .= pullNumber p
+    , "title" .= pullTitle p
+    , "url" .= pullUrl p
+    , "author" .= pullAuthor p
+    , "created" .= pullCreated p
+    , "merged" .= pullMerged p
+    , "open_time" .= fmap fst pullAnalysisOpenTime
+    , "work_open_time" .= fmap snd pullAnalysisOpenTime
     ]
 
 instance DefaultOrdered PullAnalysis where
-  headerOrder _ = header ["number", "title", "url", "author", "created", "merged", "open_time"]
+  headerOrder _ = header ["number", "title", "url", "author", "created", "merged", "open_time", "work_open_time"]
 
 -- | Configuration information for the program.
 data Config = Config
@@ -159,8 +159,15 @@ analyzePRs = fmap analyze
     analyze :: Pull -> PullAnalysis
     analyze pull@Pull { pullCreated, pullMerged } = PullAnalysis
       { pullAnalysisPull = pull
-      , pullAnalysisOpenTime = (`diffUTCTime` pullCreated) <$> pullMerged
+      , pullAnalysisOpenTime = openTime pullCreated pullMerged
       }
+
+    openTime pullCreated maybePullMerged = do
+      pullMerged <- maybePullMerged
+      pure
+        ( pullMerged `diffUTCTime` pullCreated
+        , pullMerged `diffWorkTime` pullCreated
+        )
 
 printPRs :: [Pull] -> IO ()
 printPRs prs = printAll >> printRemaining
@@ -272,3 +279,24 @@ unfoldrM f = iter mempty
       (a, next) <- f x
       let newAcc = acc <> a
       maybe (pure newAcc) (iter newAcc) next
+
+-- | Represents a time duration calculated between two time points skipping
+-- weekend days between them.
+newtype WorkDiffTime = WorkDiffTime { unWorkDiffTime :: NominalDiffTime }
+  deriving (Eq, Show)
+
+instance ToField WorkDiffTime where
+  toField = toField . unWorkDiffTime
+
+diffWorkTime :: UTCTime -> UTCTime -> WorkDiffTime
+diffWorkTime to from = WorkDiffTime $ fullDiff - weekends
+  where
+    fromDay = utctDay from
+    toDay = utctDay to
+
+    fullDiff = diffUTCTime to from
+    weekends = (* nominalDay) . fromIntegral . length . filter isWeekend . fmap dayOfWeek $ [fromDay..toDay]
+
+    isWeekend Saturday = True
+    isWeekend Sunday = True
+    isWeekend _ = False
