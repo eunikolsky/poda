@@ -39,6 +39,7 @@ import Network.HTTP.Types
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
+import qualified Data.Ord (Down(..))
 import qualified Data.Text as T
 
 share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
@@ -62,6 +63,11 @@ share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
     UniqueNumber number
     deriving Show
 |]
+
+-- | @Pull@ equality is based on their numbers only. Other fields are assumed to be
+-- the same no matter which API call they came from.
+instance Eq Pull where
+  Pull { pullNumber = number0 } == Pull { pullNumber = number1 } = number0 == number1
 
 instance FromJSON Pull where
   parseJSON = withObject "PR" $ \v -> do
@@ -125,25 +131,16 @@ newtype Repo = Repo { unRepo :: Text }
 instance FromJSON Repo where
   parseJSON = fmap Repo . parseJSON
 
+-- | List PRs in a repository when:
+-- * they have the given @configLabel@;
+-- * or they are created by a member of the @configLocalTeam@.
 listPRs :: Config -> IO [Pull]
 listPRs config = do
   manager <- newManager tlsManagerSettings
 
-  let { link = GithubPath . mconcat $
-    [ "https://api.github.com/repos/", unRepo . configRepo $ config
-    , "/issues?per_page=100&state=all&labels=", configLabel config
-    ]
-  }
-  prs :: [Pull] <- flip unfoldrM link $ \link -> do
-    request <- githubRequest config link
-    response <- cachedHTTPLbs request manager
-
-    pure
-      ( filter (fromOurTeam config) . fromMaybe [] . decode . httpRData $ response
-      , GithubPath <$> httpRNextLink response
-      )
-
-  -- printPRs prs
+  labeledPRs <- listLabeledPRs manager
+  authorsPRs <- traverse (`listAuthorPRs` manager) (configLocalTeam config)
+  let prs = sortByNumberDesc . nub $ labeledPRs ++ concat authorsPRs
 
   runSqlite dbPath $ do
     -- delete all existing PRs first so that the uniqueness constraint doesn't block the insert;
@@ -152,6 +149,31 @@ listPRs config = do
     insertMany_ prs
 
   pure prs
+
+  where
+    listLabeledPRs :: Manager -> IO [Pull]
+    listLabeledPRs = listPRs' $ "labels=" <> configLabel config
+
+    listAuthorPRs :: Text -> Manager -> IO [Pull]
+    listAuthorPRs author = listPRs' $ "creator=" <> author
+
+    listPRs' :: Text -> Manager -> IO [Pull]
+    listPRs' parameter manager = do
+      let { link = GithubPath . mconcat $
+        [ "https://api.github.com/repos/", unRepo . configRepo $ config
+        , "/issues?per_page=100&state=all&", parameter
+        ]
+      }
+      flip unfoldrM link $ \link -> do
+        request <- githubRequest config link
+        response <- cachedHTTPLbs request manager
+
+        pure
+          ( filter (fromOurTeam config) . fromMaybe [] . decode . httpRData $ response
+          , GithubPath <$> httpRNextLink response
+          )
+
+    sortByNumberDesc = sortOn (Data.Ord.Down . pullNumber)
 
 analyzePRs :: [Pull] -> [PullAnalysis]
 analyzePRs = fmap analyze
@@ -198,7 +220,7 @@ cachedHTTPLbs req mgr = runSqlite dbPath $ do
   let url = T.pack . show . getUri $ req
   maybeCachedResponse <- selectFirst [CachedResponseUrl ==. url] []
   let reqWithCache = applyCachedResponse (entityVal <$> maybeCachedResponse) req
-  -- liftIO . putStrLn $ mconcat ["URL ", T.unpack url, " etag: ", maybe "N/A" show (maybeCachedResponse >>= cachedResponseETag . entityVal)]
+  liftIO . putStrLn $ mconcat ["URL ", T.unpack url, " etag: ", maybe "N/A" show (maybeCachedResponse >>= cachedResponseETag . entityVal)]
 
   resp <- liftIO $ httpLbs reqWithCache mgr
 
