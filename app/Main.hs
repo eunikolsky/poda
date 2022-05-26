@@ -15,12 +15,14 @@ main = do
   migrateDB
   a <- analyzePRs <$> listPRs config
   BL.writeFile "pulls.csv" $ encodeDefaultOrderedByName a
-  forM_ (averageWorkOpenTimeByMonth a) $ \(yearMonth, maybeAvg) ->
-    let { avg = maybe
-      "didn't have any PRs"
-      (\(WorkDiffTime openTime, count) -> mconcat ["had ", show count, " PRs, average work open time: ", formatDiffTime openTime])
-      maybeAvg
-    } in putStrLn $ mconcat [show yearMonth, " ", avg]
+  forM_ (averageWorkOpenTimeByMonth a) $ \(yearMonth, prGroup) ->
+    putStrLn $ mconcat
+      [ show yearMonth
+      , " had ", show $ prgPRCount prGroup, " PRs"
+      , ", ", show $ prgMergedPRCount prGroup, " merged PRs"
+      , "; average open time: ", maybe "N/A" (formatDiffTime . arOpenDuration) $ prgAverageResult prGroup
+      , " (ignoring weekends: ", maybe "N/A" (formatDiffTime . unWorkDiffTime . arOpenWorkDuration) $ prgAverageResult prGroup, ")"
+      ]
 
 loadConfig :: IO Config
 loadConfig = do
