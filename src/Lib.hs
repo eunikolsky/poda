@@ -24,6 +24,7 @@ import Control.Monad.Reader
 import Data.Aeson hiding ((.=))
 import Data.ByteString (ByteString)
 import Data.Csv ((.=), DefaultOrdered, ToField, ToNamedRecord, header, headerOrder, namedRecord, toField, toNamedRecord)
+import Data.Function (on)
 import Data.List
 import Data.Maybe
 import Data.Text (Text)
@@ -36,6 +37,8 @@ import GHC.Generics
 import Network.HTTP.Client
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types
+import Text.Printf (printf)
+import qualified Data.Bifunctor (second)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
@@ -305,7 +308,10 @@ unfoldrM f = iter mempty
 -- | Represents a time duration calculated between two time points skipping
 -- weekend days between them.
 newtype WorkDiffTime = WorkDiffTime { unWorkDiffTime :: NominalDiffTime }
-  deriving (Eq, Show)
+  deriving Eq
+
+instance Show WorkDiffTime where
+  show (WorkDiffTime dt) = mconcat ["WorkDiffTime ", show dt]
 
 instance ToField WorkDiffTime where
   toField = toField . unWorkDiffTime
@@ -322,3 +328,28 @@ diffWorkTime to from = WorkDiffTime $ fullDiff - weekends
     isWeekend Saturday = True
     isWeekend Sunday = True
     isWeekend _ = False
+
+avg :: Fractional a => [a] -> Maybe a
+avg [] = Nothing
+avg xs = Just $ sum xs / genericLength xs
+
+newtype YearMonth = YearMonth (Integer, Int)
+  deriving Eq
+
+instance Show YearMonth where
+  show (YearMonth (year, month)) = printf "%04d-%02d" year month
+
+yearMonth :: Day -> YearMonth
+yearMonth d = YearMonth (y, m)
+  where (y, m, _) = toGregorian d
+
+averageWorkOpenTimeByMonth :: [PullAnalysis] -> [(YearMonth, Maybe WorkDiffTime)]
+averageWorkOpenTimeByMonth pulls = mapSecond avgTime . extendYearMonth $ groups
+  where
+    groups = groupBy ((==) `on` yearMonth . utctDay . pullCreated . pullAnalysisPull) pulls
+    extendYearMonth = fmap (\xs@(PullAnalysis { pullAnalysisPull = Pull { pullCreated } } : _) -> (yearMonth $ utctDay pullCreated, xs))
+    avgTime prs = let times = mapMaybe (fmap (unWorkDiffTime . snd) . pullAnalysisOpenTime) prs
+      in WorkDiffTime <$> avg times
+
+mapSecond :: (b -> c) -> [(a, b)] -> [(a, c)]
+mapSecond f = map (Data.Bifunctor.second f)
