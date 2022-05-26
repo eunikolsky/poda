@@ -1,6 +1,6 @@
 module Main where
 
-import Control.Monad (unless)
+import Control.Monad (forM_, unless)
 import Data.Aeson (eitherDecodeFileStrict')
 import Data.Csv (encodeDefaultOrderedByName)
 import System.Directory (doesFileExist)
@@ -15,6 +15,12 @@ main = do
   migrateDB
   a <- analyzePRs <$> listPRs config
   BL.writeFile "pulls.csv" $ encodeDefaultOrderedByName a
+  forM_ (averageWorkOpenTimeByMonth a) $ \(yearMonth, maybeAvg) ->
+    let { avg = maybe
+      "didn't have any PRs"
+      (\(WorkDiffTime openTime, count) -> mconcat ["had ", show count, " PRs, average work open time: ", formatDiffTime openTime])
+      maybeAvg
+    } in putStrLn $ mconcat [show yearMonth, " ", avg]
 
 loadConfig :: IO Config
 loadConfig = do

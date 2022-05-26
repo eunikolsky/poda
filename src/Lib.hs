@@ -223,7 +223,7 @@ cachedHTTPLbs req mgr = runSqlite dbPath $ do
   let url = T.pack . show . getUri $ req
   maybeCachedResponse <- selectFirst [CachedResponseUrl ==. url] []
   let reqWithCache = applyCachedResponse (entityVal <$> maybeCachedResponse) req
-  liftIO . putStrLn $ mconcat ["URL ", T.unpack url, " etag: ", maybe "N/A" show (maybeCachedResponse >>= cachedResponseETag . entityVal)]
+  -- liftIO . putStrLn $ mconcat ["URL ", T.unpack url, " etag: ", maybe "N/A" show (maybeCachedResponse >>= cachedResponseETag . entityVal)]
 
   resp <- liftIO $ httpLbs reqWithCache mgr
 
@@ -350,6 +350,9 @@ averageWorkOpenTimeByMonth pulls = mapSecond avgTime . extendYearMonth $ groups
     extendYearMonth = fmap (\xs@(PullAnalysis { pullAnalysisPull = Pull { pullCreated } } : _) -> (yearMonth $ utctDay pullCreated, xs))
     avgTime prs = let times = mapMaybe (fmap (unWorkDiffTime . snd) . pullAnalysisOpenTime) prs
       in Data.Bifunctor.first WorkDiffTime <$> avg times
+
+formatDiffTime :: NominalDiffTime -> String
+formatDiffTime = formatTime defaultTimeLocale "%w weeks %D days %H hours %M minutes"
 
 mapSecond :: (b -> c) -> [(a, b)] -> [(a, c)]
 mapSecond f = map (Data.Bifunctor.second f)
