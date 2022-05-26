@@ -38,7 +38,7 @@ import Network.HTTP.Client
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types
 import Text.Printf (printf)
-import qualified Data.Bifunctor (second)
+import qualified Data.Bifunctor (first, second)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
@@ -329,9 +329,9 @@ diffWorkTime to from = WorkDiffTime $ fullDiff - weekends
     isWeekend Sunday = True
     isWeekend _ = False
 
-avg :: Fractional a => [a] -> Maybe a
+avg :: Fractional a => [a] -> Maybe (a, Int)
 avg [] = Nothing
-avg xs = Just $ sum xs / genericLength xs
+avg xs = Just (sum xs / genericLength xs, length xs)
 
 newtype YearMonth = YearMonth (Integer, Int)
   deriving Eq
@@ -343,13 +343,13 @@ yearMonth :: Day -> YearMonth
 yearMonth d = YearMonth (y, m)
   where (y, m, _) = toGregorian d
 
-averageWorkOpenTimeByMonth :: [PullAnalysis] -> [(YearMonth, Maybe WorkDiffTime)]
+averageWorkOpenTimeByMonth :: [PullAnalysis] -> [(YearMonth, Maybe (WorkDiffTime, Int))]
 averageWorkOpenTimeByMonth pulls = mapSecond avgTime . extendYearMonth $ groups
   where
     groups = groupBy ((==) `on` yearMonth . utctDay . pullCreated . pullAnalysisPull) pulls
     extendYearMonth = fmap (\xs@(PullAnalysis { pullAnalysisPull = Pull { pullCreated } } : _) -> (yearMonth $ utctDay pullCreated, xs))
     avgTime prs = let times = mapMaybe (fmap (unWorkDiffTime . snd) . pullAnalysisOpenTime) prs
-      in WorkDiffTime <$> avg times
+      in Data.Bifunctor.first WorkDiffTime <$> avg times
 
 mapSecond :: (b -> c) -> [(a, b)] -> [(a, c)]
 mapSecond f = map (Data.Bifunctor.second f)
