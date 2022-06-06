@@ -48,6 +48,7 @@ executables:
     dependencies:
     - poda
     - directory
+    - filepath
 
 tests:
   poda-test:

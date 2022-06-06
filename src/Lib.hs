@@ -27,6 +27,7 @@ import Data.Csv ((.=), DefaultOrdered, ToField, ToNamedRecord, header, headerOrd
 import Data.Function (on)
 import Data.List
 import Data.Maybe
+import Data.Ord (comparing)
 import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Data.Time
@@ -72,6 +73,9 @@ share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
 instance Eq Pull where
   Pull { pullNumber = number0 } == Pull { pullNumber = number1 } = number0 == number1
 
+instance Ord Pull where
+  compare = comparing pullNumber
+
 instance FromJSON Pull where
   parseJSON = withObject "PR" $ \v -> do
     pullNumber <- v .: "number"
@@ -89,6 +93,13 @@ data PullAnalysis = PullAnalysis
   -- regardless of any time it might have been closed in between.
   }
   deriving Show
+
+instance Eq PullAnalysis where
+  PullAnalysis { pullAnalysisPull = pull0 } == PullAnalysis { pullAnalysisPull = pull1 } =
+    pull0 == pull1
+
+instance Ord PullAnalysis where
+  compare = comparing pullAnalysisPull
 
 instance ToField UTCTime where
   toField = C.pack . iso8601Show
@@ -122,6 +133,8 @@ data Config = Config
     -- ^ Repository to analyze
   , configLabel :: Text
     -- ^ Only PRs with this label are analyzed
+  , configFirstSprintStart :: Day
+    -- ^ Start day of the first sprint
   }
   deriving (Generic, Show)
 
@@ -373,3 +386,24 @@ formatDiffTime = formatTime defaultTimeLocale "%ww %Dd %H:%M"
 
 mapSecond :: (b -> c) -> [(a, b)] -> [(a, c)]
 mapSecond f = map (Data.Bifunctor.second f)
+
+newtype Sprint = Sprint Day -- ^ Start day of a 2-week's long sprint.
+
+instance Show Sprint where
+  show (Sprint d) = mconcat ["[", show d, "…", show $ addDays 13 d, "]"]
+
+nextSprint :: Sprint -> Sprint
+nextSprint (Sprint d) = Sprint $ addDays 14 d
+
+inSprint :: Sprint -> Day -> Bool
+inSprint (Sprint d) day = day >= d && day <= addDays 13 d
+
+sprintFilename :: Sprint -> String
+sprintFilename (Sprint d) = mconcat [show d, "-", show $ addDays 13 d]
+
+groupBySprint :: Sprint -> [PullAnalysis] -> [(Sprint, [PullAnalysis])]
+groupBySprint firstSprint prs = (\s -> (s, filter (inSprint s . prDay) prs)) <$> allSprints
+  where
+    maxPRCreated = prDay . maximum $ prs
+    allSprints = takeWhile (\(Sprint d) -> d < maxPRCreated) $ iterate nextSprint firstSprint
+    prDay = utctDay . pullCreated . pullAnalysisPull
