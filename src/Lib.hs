@@ -5,10 +5,11 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
@@ -22,6 +23,7 @@ import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Reader
 import Data.Aeson hiding ((.=))
+import Data.Aeson.Types hiding ((.=))
 import Data.ByteString (ByteString)
 import Data.Csv ((.=), DefaultOrdered, ToField, ToNamedRecord, header, headerOrder, namedRecord, toField, toNamedRecord)
 import Data.Function (on)
@@ -45,6 +47,9 @@ import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Ord (Down(..))
 import qualified Data.Text as T
+import qualified Database.Persist.Sqlite as SQL
+
+import EventType
 
 share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
   CachedResponse
@@ -66,7 +71,47 @@ share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
     merged UTCTime Maybe
     UniqueNumber number
     deriving Show
+
+  PullEvent
+    ghId Int
+    type EventType
+    created UTCTime
+    pull PullId OnDeleteCascade
+    deriving Show
 |]
+
+-- | A "raw" version of @PullEvent@ that can be decoded from JSON.
+-- Decoding @PullEvent@ directly doesn't work because:
+-- 1. @parseJSON@ doesn't know the PR that the events are associated with;
+-- 2. we're only interested in a subset of event types, but I can't find a
+--    way to parse only "good" events from an array in JSON.
+data PullEventJSON = PullEventJSON
+  { pejId :: Int
+  , pejType :: Text
+  , pejCreated :: UTCTime
+  }
+  deriving (Show)
+
+instance FromJSON PullEventJSON where
+  parseJSON = withObject "PullEvent" $ \v -> PullEventJSON
+    <$> v .: "id"
+    <*> v .: "event"
+    <*> v .: "created_at"
+
+pullEventFromJSON :: SQL.Key Pull -> PullEventJSON -> Maybe PullEvent
+pullEventFromJSON pullId PullEventJSON {..} = do
+  pullEventType <- mkEventType pejType
+  pure $ PullEvent
+    { pullEventGhId = pejId
+    , pullEventType = pullEventType
+    , pullEventCreated = pejCreated
+    , pullEventPull = pullId
+    }
+
+parsePullEvents :: SQL.Key Pull -> Value -> Either String [PullEvent]
+parsePullEvents pullId value = do
+  eventJsons <- parseEither parseJSON value
+  pure $ mapMaybe (pullEventFromJSON pullId) eventJsons
 
 -- | @Pull@ equality is based on their numbers only. Other fields are assumed to be
 -- the same no matter which API call they came from.
