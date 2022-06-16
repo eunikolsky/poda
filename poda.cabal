@@ -25,6 +25,7 @@ source-repository head
 
 library
   exposed-modules:
+      Analyze
       Database
       EventType
       Lib
@@ -68,6 +69,7 @@ test-suite poda-test
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   other-modules:
+      AnalyzeSpec
       Paths_poda
   hs-source-dirs:
       test

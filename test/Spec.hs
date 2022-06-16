@@ -6,6 +6,7 @@ import Data.Time.Format.ISO8601
 import Test.Hspec
 
 import Lib
+import AnalyzeSpec
 
 main :: IO ()
 main = hspec $ do
@@ -59,6 +60,8 @@ main = hspec $ do
       diffWorkTime' nextTuesday thursday `shouldBe`
         (NumberDays . WorkDiffTime $ 3 * nominalDay + (((8 * 60) + 42) * 60) + 40)
 
+  AnalyzeSpec.spec
+
 -- | @WorkDiffTime@ that has a @Show@ instance to display duration in days —
 -- in order to have cleaner test failure messages.
 newtype NumberDays = NumberDays WorkDiffTime
@@ -72,6 +75,3 @@ mkNumberDays = NumberDays . WorkDiffTime . (* nominalDay) . realToFrac
 
 diffWorkTime' :: UTCTime -> UTCTime -> NumberDays
 diffWorkTime' from = NumberDays . diffWorkTime from
-
-utcTime :: MonadFail m => String -> m UTCTime
-utcTime = iso8601ParseM
