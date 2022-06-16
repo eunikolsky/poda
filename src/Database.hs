@@ -70,3 +70,7 @@ instance FromJSON Pull where
     pullCreated <- v .: "created_at"
     pullMerged <- v .: "pull_request" >>= (.: "merged_at")
     pure $ Pull { pullNumber, pullTitle, pullUrl, pullAuthor, pullCreated, pullMerged }
+
+markReadyTime :: PullEvent -> Maybe UTCTime
+markReadyTime PullEvent { pullEventType = MarkReady, pullEventCreated } = Just pullEventCreated
+markReadyTime _ = Nothing

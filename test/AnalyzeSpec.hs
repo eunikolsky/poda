@@ -4,18 +4,26 @@ module AnalyzeSpec where
 
 import Data.Time
 import Data.Time.Format.ISO8601
+import Database.Persist.Sqlite
 import Test.Hspec
 
 import Analyze
 import Database
+import EventType
 
 spec :: Spec
 spec =
   describe "draftDuration" $
-    context "when PR is merged" $
+    context "when PR is merged" $ do
       it "returns zero when there are no events" $ do
         pull <- defaultDTI
         draftDuration pull `shouldBe` 0
+
+      it "calculates duration from created to undraft" $ do
+        undraftTime <- utcTime "2022-01-03T12:00:00Z"
+        pull <- defaultDTI
+        let pull' = pull { fEvents = [markReadyEvent undraftTime] }
+        draftDuration pull' `shouldBe` 2.5 * nominalDay
 
 defaultDTI :: MonadFail m => m FreeDTI
 defaultDTI = do
@@ -26,6 +34,14 @@ defaultDTI = do
     , fMerged
     , fEvents = []
     }
+
+markReadyEvent :: UTCTime -> PullEvent
+markReadyEvent time = PullEvent
+  { pullEventGhId = 0
+  , pullEventType = MarkReady
+  , pullEventCreated = time
+  , pullEventPull = toSqlKey 0
+  }
 
 data FreeDTI = FreeDTI
   { fCreated :: UTCTime

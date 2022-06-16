@@ -77,6 +77,8 @@ data PullAnalysis = PullAnalysis
   , pullAnalysisOpenTime :: Maybe (NominalDiffTime, WorkDiffTime)
   -- ^ Amount of time the PR was open (if merged). This is the time from open to merge time,
   -- regardless of any time it might have been closed in between.
+  -- FIXME make the type more reusable (e.g. store start&end times so that both types of
+  -- durations can be calculated later)
   }
   deriving Show
 

@@ -61,4 +61,5 @@ tests:
     dependencies:
     - poda
     - hspec
+    - persistent-sqlite
     - time
