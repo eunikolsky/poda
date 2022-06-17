@@ -32,6 +32,20 @@ spec =
         let pull' = pull { fEvents = [markDraftEvent draftTime, markReadyEvent undraftTime] }
         draftDuration pull' `shouldBe` 2.5 * nominalDay
 
+      it "sums up multiple duration periods" $ do
+        times <- traverse utcTime -- pairs of draft-undraft times
+          [ "2022-01-02T00:00:00Z"
+          , "2022-01-02T06:00:00Z" -- 0.25 days
+          , "2022-01-02T18:00:00Z"
+          , "2022-01-04T12:00:00Z" -- 1.75 days
+          , "2022-01-06T00:00:00Z"
+          , "2022-01-07T00:00:00Z" -- 1 day
+          ]
+        let events = zipWith ($) (cycle [markDraftEvent, markReadyEvent]) times
+        pull <- defaultDTI
+        let pull' = pull { fEvents = events }
+        draftDuration pull' `shouldBe` (0.25 + 1.75 + 1) * nominalDay
+
 defaultDTI :: MonadFail m => m FreeDTI
 defaultDTI = do
   fCreated <- utcTime "2022-01-01T00:00:00Z"
