@@ -25,6 +25,13 @@ spec =
         let pull' = pull { fEvents = [markReadyEvent undraftTime] }
         draftDuration pull' `shouldBe` 2.5 * nominalDay
 
+      it "calculates duration from draft to undraft" $ do
+        draftTime <- utcTime "2022-01-02T00:00:00Z"
+        undraftTime <- utcTime "2022-01-04T12:00:00Z"
+        pull <- defaultDTI
+        let pull' = pull { fEvents = [markDraftEvent draftTime, markReadyEvent undraftTime] }
+        draftDuration pull' `shouldBe` 2.5 * nominalDay
+
 defaultDTI :: MonadFail m => m FreeDTI
 defaultDTI = do
   fCreated <- utcTime "2022-01-01T00:00:00Z"
@@ -34,6 +41,14 @@ defaultDTI = do
     , fMerged
     , fEvents = []
     }
+
+markDraftEvent :: UTCTime -> PullEvent
+markDraftEvent time = PullEvent
+  { pullEventGhId = 0
+  , pullEventType = MarkDraft
+  , pullEventCreated = time
+  , pullEventPull = toSqlKey 0
+  }
 
 markReadyEvent :: UTCTime -> PullEvent
 markReadyEvent time = PullEvent

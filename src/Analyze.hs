@@ -16,8 +16,11 @@ class DraftTimeInput a where
 -- we don't know the state of the PR at a point in time until we get an
 -- event after that time.
 draftDuration :: DraftTimeInput a => a -> NominalDiffTime
-draftDuration dti = fromMaybe 0 $ diffUTCTime <$> maybeFirstMarkReady <*> pure (dtiCreated dti)
+draftDuration dti = fromMaybe 0 $ diffUTCTime <$> maybeFirstMarkReady <*> pure draftStart
   where
+    -- draft starts at the first "mark as draft" event or when the PR is created
+    draftStart = fromMaybe (dtiCreated dti) maybeFirstMarkDraft
+    maybeFirstMarkDraft = firstJust markDraftTime $ dtiEvents dti
     maybeFirstMarkReady = firstJust markReadyTime $ dtiEvents dti
 
 firstJust :: (a -> Maybe b) -> [a] -> Maybe b

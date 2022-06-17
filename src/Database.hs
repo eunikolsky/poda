@@ -74,3 +74,7 @@ instance FromJSON Pull where
 markReadyTime :: PullEvent -> Maybe UTCTime
 markReadyTime PullEvent { pullEventType = MarkReady, pullEventCreated } = Just pullEventCreated
 markReadyTime _ = Nothing
+
+markDraftTime :: PullEvent -> Maybe UTCTime
+markDraftTime PullEvent { pullEventType = MarkDraft, pullEventCreated } = Just pullEventCreated
+markDraftTime _ = Nothing
