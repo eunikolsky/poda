@@ -316,7 +316,7 @@ yearMonth d = YearMonth (y, m)
 
 data AverageResult = AverageResult
   { arOpenDuration :: NominalDiffTime
-  , arOpenWorkDuration :: NominalDiffTime -- FIXME use WorkDiffTime directly
+  , arOpenWorkDuration :: NominalDiffTime
   }
 
 data PRGroup = PRGroup
