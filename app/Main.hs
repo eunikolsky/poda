@@ -22,9 +22,9 @@ main = do
 
 printOpenTimes :: [PullAnalysis] -> IO ()
 printOpenTimes a =
-  forM_ (averageWorkOpenTimeByMonth a) $ \(yearMonth, prGroup) ->
+  forM_ (averageWorkOpenTimeByMonth a) $ \(period, prGroup) ->
     putStrLn $ mconcat
-      [ show yearMonth
+      [ show period
       , " had ", show $ prgPRCount prGroup, " PRs"
       , ", ", show $ prgMergedPRCount prGroup, " merged PRs"
       , "; average open time: ", maybe "N/A" (formatDiffTime . arOpenDuration) $ prgAverageResult prGroup
