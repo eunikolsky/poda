@@ -1,5 +1,9 @@
-module Analyze where
+module Analyze
+  ( DraftTimeInput(..)
+  , draftDuration
+  ) where
 
+import Control.Applicative ((<|>))
 import Data.Maybe
 import Data.Monoid
 import Data.Time
@@ -19,29 +23,45 @@ class DraftTimeInput a where
 -- event after that time.
 --
 -- Assumptions:
--- * if a PR is merged, either the latest event before that is "mark as ready"
---   or there was never a "mark as draft".
 -- * there can't be 2+ events of the same type in a row.
-draftDuration :: DraftTimeInput a => a -> NominalDiffTime
-draftDuration dti = maybe 0 getSum . mconcat . fmap (fmap Sum) $ draftDurations
+draftDuration :: (HasCallStack, DraftTimeInput a) => a -> NominalDiffTime
+draftDuration dti = getSum . mconcat . fmap Sum $ draftDurations
   where
-    eventPairs = chunksOf 2 (dtiEvents dti)
-    draftDurations = map pairDuration eventPairs
+    draftDurations = map pairDuration $ adjacentPairs stateTransitions
 
-    pairDuration :: HasCallStack => [PullEvent] -> Maybe NominalDiffTime
-    pairDuration [draft, ready] = diffUTCTime <$> markReadyTime ready <*> markDraftTime draft
-    pairDuration [ready] = diffUTCTime <$> markReadyTime ready <*> pure (dtiCreated dti)
-    pullDuration xs = error . mconcat $ ["pairDuration: unexpected input length ", show (length xs), ": ", show xs]
+    stateTransitions = catMaybes
+      $ Just (StateTransition Created (dtiCreated dti))
+      : map parseStateEvent (dtiEvents dti)
+      ++ [StateTransition Merged <$> dtiMerged dti]
 
-    -- draft starts at the first "mark as draft" event or when the PR is created
-    draftStart = fromMaybe (dtiCreated dti) maybeFirstMarkDraft
-    maybeFirstMarkDraft = firstJust markDraftTime $ dtiEvents dti
-    maybeFirstMarkReady = firstJust markReadyTime $ dtiEvents dti
+    parseStateEvent :: PullEvent -> Maybe StateTransition
+    parseStateEvent e
+      =   StateTransition MarkedDraft <$> markDraftTime e
+      <|> StateTransition MarkedReady <$> markReadyTime e
 
-firstJust :: (a -> Maybe b) -> [a] -> Maybe b
-firstJust f = listToMaybe . mapMaybe f
+    pairDuration :: HasCallStack => (StateTransition, StateTransition) -> NominalDiffTime
+    pairDuration (StateTransition MarkedDraft draft, StateTransition MarkedReady ready) = diffUTCTime ready draft
+    pairDuration (StateTransition MarkedReady _, StateTransition MarkedDraft _) = 0
+    pairDuration (StateTransition MarkedDraft draft, StateTransition Merged merged) = diffUTCTime merged draft
+    pairDuration (StateTransition MarkedReady _, StateTransition Merged _) = 0
+    pairDuration (StateTransition Created created, StateTransition MarkedReady ready) = diffUTCTime ready created
+    pairDuration (StateTransition Created _, StateTransition Merged _) = 0
+    pairDuration (StateTransition Created _, StateTransition MarkedDraft _) = 0
+    pairDuration (x, c@(StateTransition Created _)) = error . mconcat $ ["pairDuration: impossible ", show c, " after ", show x]
+    pairDuration (m@(StateTransition Merged _), x) = error . mconcat $ ["pairDuration: impossible ", show x, " after ", show m]
+    pairDuration (x@(StateTransition MarkedDraft _), y@(StateTransition MarkedDraft _)) = error . mconcat $ ["pairDuration: unexpected pair of MarkedDraft in a row: ", show (x, y)]
+    pairDuration (x@(StateTransition MarkedReady _), y@(StateTransition MarkedReady _)) = error . mconcat $ ["pairDuration: unexpected pair of MarkedReady in a row: ", show (x, y)]
 
-chunksOf :: Int -> [a] -> [[a]]
-chunksOf _ [] = []
-chunksOf n xs = chunk : chunksOf n rest
-  where (chunk, rest) = splitAt n xs
+-- | Describes state transition events that are interesting for @draftDuration@.
+data StateTransitionEvent = Created | MarkedDraft | MarkedReady | Merged
+  deriving Show
+
+data StateTransition = StateTransition
+  { stEvent :: StateTransitionEvent
+  , stTime :: UTCTime
+  }
+  deriving Show
+
+adjacentPairs :: [a] -> [(a, a)]
+adjacentPairs [] = []
+adjacentPairs xs = zip xs (tail xs)
