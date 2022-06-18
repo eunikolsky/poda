@@ -29,6 +29,7 @@ library
       Database
       EventType
       Lib
+      WorkDiffTime
   other-modules:
       Paths_poda
   hs-source-dirs:

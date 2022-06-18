@@ -7,6 +7,7 @@ import Test.Hspec
 
 import Lib
 import AnalyzeSpec
+import WorkDiffTime
 
 main :: IO ()
 main = hspec $ do

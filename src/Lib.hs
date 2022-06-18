@@ -4,7 +4,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TupleSections #-}
-{-# LANGUAGE TypeApplications #-}
 
 module Lib where
 
@@ -37,6 +36,7 @@ import qualified Database.Persist.Sqlite as SQL
 
 import Database
 import EventType
+import WorkDiffTime
 
 -- | A "raw" version of @PullEvent@ that can be decoded from JSON.
 -- Decoding @PullEvent@ directly doesn't work because:
@@ -88,12 +88,9 @@ instance Eq PullAnalysis where
 instance Ord PullAnalysis where
   compare = comparing pullAnalysisPull
 
+-- TODO remove orphan instances
 instance ToField UTCTime where
   toField = C.pack . iso8601Show
-
--- | This allows to encode a @NominalDiffTime@ value into a CSV record.
-instance ToField NominalDiffTime where
-  toField = C.pack . show @Int . truncate @Double . realToFrac
 
 instance ToNamedRecord PullAnalysis where
   toNamedRecord PullAnalysis { pullAnalysisPull = p, pullAnalysisOpenTime } = namedRecord
@@ -304,30 +301,6 @@ unfoldrM f = iter mempty
       (a, next) <- f x
       let newAcc = acc <> a
       maybe (pure newAcc) (iter newAcc) next
-
--- | Represents a time duration calculated between two time points skipping
--- weekend days between them.
-newtype WorkDiffTime = WorkDiffTime { unWorkDiffTime :: NominalDiffTime }
-  deriving Eq
-
-instance Show WorkDiffTime where
-  show (WorkDiffTime dt) = mconcat ["WorkDiffTime ", show dt]
-
-instance ToField WorkDiffTime where
-  toField = toField . unWorkDiffTime
-
-diffWorkTime :: UTCTime -> UTCTime -> WorkDiffTime
-diffWorkTime to from = WorkDiffTime $ fullDiff - weekends
-  where
-    fromDay = utctDay from
-    toDay = utctDay to
-
-    fullDiff = diffUTCTime to from
-    weekends = (* nominalDay) . fromIntegral . length . filter isWeekend . fmap dayOfWeek $ [fromDay..toDay]
-
-    isWeekend Saturday = True
-    isWeekend Sunday = True
-    isWeekend _ = False
 
 avg :: Fractional a => [a] -> Maybe a
 avg [] = Nothing

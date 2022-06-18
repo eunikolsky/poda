@@ -9,6 +9,7 @@ import System.FilePath ((</>))
 import qualified Data.ByteString.Lazy as BL (writeFile)
 
 import Lib
+import WorkDiffTime
 
 main :: IO ()
 main = do
