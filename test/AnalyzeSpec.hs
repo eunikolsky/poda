@@ -1,17 +1,13 @@
-{-# LANGUAGE NamedFieldPuns #-}
-
 module AnalyzeSpec where
 
-import Data.Maybe
 import Data.Time
-import Data.Time.Format.ISO8601
 import Database.Persist.Sqlite
-import GHC.Stack
 import Test.Hspec
 
 import Analyze
 import Database
 import EventType
+import SpecCommon
 
 spec :: Spec
 spec =
@@ -120,8 +116,3 @@ instance DraftDurationInput FreeDDI where
   ddiMerged = fMerged
   ddiEvents = fEvents
   ddiIsDraft = fIsDraft
-
--- | Parses @UTCTime@ from an ISO8601 string: @2022-12-31T23:59:59Z@.
--- Fails if the string is not in the correct format.
-utcTime :: HasCallStack => String -> UTCTime
-utcTime = fromJust . iso8601ParseM

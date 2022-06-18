@@ -72,6 +72,8 @@ test-suite poda-test
   main-is: Spec.hs
   other-modules:
       AnalyzeSpec
+      SpecCommon
+      WorkDiffTimeSpec
       Paths_poda
   hs-source-dirs:
       test
