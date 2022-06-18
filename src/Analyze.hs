@@ -1,5 +1,5 @@
 module Analyze
-  ( DraftTimeInput(..)
+  ( DraftDurationInput(..)
   , draftDuration
   ) where
 
@@ -12,10 +12,10 @@ import GHC.Stack (HasCallStack)
 import Database
 
 -- | Defines the necessary data to calculate the draft duration.
-class DraftTimeInput a where
-  dtiCreated :: a -> UTCTime
-  dtiMerged :: a -> Maybe UTCTime
-  dtiEvents :: a -> [PullEvent]
+class DraftDurationInput a where
+  ddiCreated :: a -> UTCTime
+  ddiMerged :: a -> Maybe UTCTime
+  ddiEvents :: a -> [PullEvent]
 
 -- | Calculates the draft duration of a PR.
 -- When a PR is marked as draft or ready for review, an event is created;
@@ -24,13 +24,13 @@ class DraftTimeInput a where
 --
 -- Assumptions:
 -- * there can't be 2+ events of the same type in a row.
-draftDuration :: (HasCallStack, DraftTimeInput a) => a -> NominalDiffTime
-draftDuration dti = getSum . foldMap (Sum . pairDuration) $ adjacentPairs stateTransitions
+draftDuration :: (HasCallStack, DraftDurationInput a) => a -> NominalDiffTime
+draftDuration ddi = getSum . foldMap (Sum . pairDuration) $ adjacentPairs stateTransitions
   where
     stateTransitions = catMaybes
-      $ Just (StateTransition Created (dtiCreated dti))
-      : map parseStateEvent (dtiEvents dti)
-      ++ [StateTransition Merged <$> dtiMerged dti]
+      $ Just (StateTransition Created (ddiCreated ddi))
+      : map parseStateEvent (ddiEvents ddi)
+      ++ [StateTransition Merged <$> ddiMerged ddi]
 
     parseStateEvent :: PullEvent -> Maybe StateTransition
     parseStateEvent e
