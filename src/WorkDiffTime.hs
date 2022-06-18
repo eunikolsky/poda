@@ -1,6 +1,9 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+
 module WorkDiffTime (
   -- * Types
-    WorkDiffTime
+    UTCPeriod(..)
+  , WorkDiffTime
 
   -- * Constructors
   , diffWorkTime
@@ -10,9 +13,12 @@ module WorkDiffTime (
   , work
   ) where
 
+import Data.Monoid (Sum(..), getSum)
 import Data.Time
 
-type UTCPeriod = (UTCTime, UTCTime)
+-- | A period between two times, generally (bigger) @to@ and (smaller) @from@.
+newtype UTCPeriod = UTCPeriod (UTCTime, UTCTime)
+  deriving (Eq, Show)
 
 -- | Represents a time duration calculated between two time points; can return
 -- both the "regular" duration (including all days) and "work" duration
@@ -21,22 +27,27 @@ type UTCPeriod = (UTCTime, UTCTime)
 -- We store a list of periods because we have to know the actual dates and times
 -- in order to filter out any weekends for "work time".
 -- TODO rename to more generic
-newtype WorkDiffTime = WorkDiffTime UTCPeriod
-  deriving Eq
+newtype WorkDiffTime = WorkDiffTime [UTCPeriod]
+  deriving (Eq, Semigroup)
 
 instance Show WorkDiffTime where
   show (WorkDiffTime dt) = mconcat ["WorkDiffTime ", show dt]
 
+-- | Creates a `WorkDiffTime` from the @from@ and @to@ time points.
+-- Use `<>` to combine multiple `WorkDiffTime`s.
 diffWorkTime :: UTCTime -> UTCTime -> WorkDiffTime
-diffWorkTime = curry WorkDiffTime
+diffWorkTime to = WorkDiffTime . pure . curry UTCPeriod to
 
 -- | Returns the "regular" time difference, including all days.
 regular :: WorkDiffTime -> NominalDiffTime
-regular (WorkDiffTime (to, from)) = diffUTCTime to from
+regular (WorkDiffTime periods) = getSum . foldMap (\(UTCPeriod (to, from)) -> Sum $ diffUTCTime to from) $ periods
 
 -- | Returns the "work" time difference, that is excluding all weekends.
 work :: WorkDiffTime -> NominalDiffTime
-work (WorkDiffTime (to, from)) = fullDiff - weekends
+work (WorkDiffTime periods) = getSum . foldMap (Sum . workPeriod) $ periods
+
+workPeriod :: UTCPeriod -> NominalDiffTime
+workPeriod (UTCPeriod (to, from)) = fullDiff - weekends
   where
     fromDay = utctDay from
     toDay = utctDay to

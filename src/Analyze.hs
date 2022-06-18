@@ -5,11 +5,11 @@ module Analyze
 
 import Control.Applicative ((<|>))
 import Data.Maybe
-import Data.Monoid
 import Data.Time
 import GHC.Stack (HasCallStack)
 
 import Database
+import WorkDiffTime hiding (regular, work)
 
 -- | Defines the necessary data to calculate the draft duration.
 class DraftDurationInput a where
@@ -31,8 +31,8 @@ class DraftDurationInput a where
 --
 -- Assumptions:
 -- * there can't be 2+ events of the same type in a row.
-draftDuration :: (HasCallStack, DraftDurationInput a) => a -> NominalDiffTime
-draftDuration ddi = getSum . foldMap (Sum . pairDuration) $ adjacentPairs stateTransitions
+draftDuration :: (HasCallStack, DraftDurationInput a) => a -> Maybe WorkDiffTime
+draftDuration ddi = foldMap pairDuration $ adjacentPairs stateTransitions
   where
     stateTransitions = catMaybes
       $ Just (StateTransition Created (ddiCreated ddi))
@@ -44,15 +44,15 @@ draftDuration ddi = getSum . foldMap (Sum . pairDuration) $ adjacentPairs stateT
       =   StateTransition MarkedDraft <$> markDraftTime e
       <|> StateTransition MarkedReady <$> markReadyTime e
 
-    pairDuration :: HasCallStack => (StateTransition, StateTransition) -> NominalDiffTime
-    pairDuration (StateTransition MarkedDraft draft, StateTransition MarkedReady ready) = diffUTCTime ready draft
-    pairDuration (StateTransition MarkedReady _, StateTransition MarkedDraft _) = 0
-    pairDuration (StateTransition MarkedDraft draft, StateTransition Merged merged) = diffUTCTime merged draft
-    pairDuration (StateTransition MarkedReady _, StateTransition Merged _) = 0
-    pairDuration (StateTransition Created created, StateTransition MarkedReady ready) = diffUTCTime ready created
+    pairDuration :: HasCallStack => (StateTransition, StateTransition) -> Maybe WorkDiffTime
+    pairDuration (StateTransition MarkedDraft draft, StateTransition MarkedReady ready) = Just $ diffWorkTime ready draft
+    pairDuration (StateTransition MarkedReady _, StateTransition MarkedDraft _) = Nothing
+    pairDuration (StateTransition MarkedDraft draft, StateTransition Merged merged) = Just $ diffWorkTime merged draft
+    pairDuration (StateTransition MarkedReady _, StateTransition Merged _) = Nothing
+    pairDuration (StateTransition Created created, StateTransition MarkedReady ready) = Just $ diffWorkTime ready created
     pairDuration (StateTransition Created created, StateTransition Merged merged) =
-      if ddiIsDraft ddi then diffUTCTime merged created else 0
-    pairDuration (StateTransition Created _, StateTransition MarkedDraft _) = 0
+      if ddiIsDraft ddi then Just (diffWorkTime merged created) else Nothing
+    pairDuration (StateTransition Created _, StateTransition MarkedDraft _) = Nothing
     pairDuration (x, c@(StateTransition Created _)) = error . mconcat $ ["pairDuration: impossible ", show c, " after ", show x]
     pairDuration (m@(StateTransition Merged _), x) = error . mconcat $ ["pairDuration: impossible ", show x, " after ", show m]
     pairDuration (x@(StateTransition MarkedDraft _), y@(StateTransition MarkedDraft _)) = error . mconcat $ ["pairDuration: unexpected pair of MarkedDraft in a row: ", show (x, y)]
