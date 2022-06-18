@@ -6,7 +6,8 @@ import Data.Time
 import Test.Hspec
 
 import SpecCommon
-import WorkDiffTime
+import WorkDiffTime hiding (regular, work)
+import qualified WorkDiffTime as WorkTime (work)
 
 spec :: Spec
 spec =
@@ -30,18 +31,20 @@ spec =
       let thursday = utcTime "2022-01-06T10:00:00Z"
           nextTuesday = utcTime "2022-01-11T18:42:40Z"
       diffWorkTime' nextTuesday thursday `shouldBe`
-        (NumberDays . WorkDiffTime $ 3 * nominalDay + (((8 * 60) + 42) * 60) + 40)
+        NumberDays (3 * nominalDay + (((8 * 60) + 42) * 60) + 40)
 
--- | @WorkDiffTime@ that has a @Show@ instance to display duration in days —
+    -- FIXME test starting/ending on a weekend
+
+-- | @NominalDiffTime@ that has a @Show@ instance to display duration in days —
 -- in order to have cleaner test failure messages.
-newtype NumberDays = NumberDays WorkDiffTime
+newtype NumberDays = NumberDays NominalDiffTime
   deriving Eq
 
 instance Show NumberDays where
-  show (NumberDays x) = (show @Float . realToFrac . (/ nominalDay) . unWorkDiffTime $ x) ++ " days"
+  show (NumberDays x) = (show @Float . realToFrac . (/ nominalDay) $ x) ++ " days"
 
 mkNumberDays :: Real a => a -> NumberDays
-mkNumberDays = NumberDays . WorkDiffTime . (* nominalDay) . realToFrac
+mkNumberDays = NumberDays . (* nominalDay) . realToFrac
 
 diffWorkTime' :: UTCTime -> UTCTime -> NumberDays
-diffWorkTime' from = NumberDays . diffWorkTime from
+diffWorkTime' from = NumberDays . WorkTime.work . diffWorkTime from

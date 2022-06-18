@@ -9,7 +9,6 @@ import System.FilePath ((</>))
 import qualified Data.ByteString.Lazy as BL (writeFile)
 
 import Lib
-import WorkDiffTime
 
 main :: IO ()
 main = do
@@ -29,7 +28,7 @@ printOpenTimes a =
       , " had ", show $ prgPRCount prGroup, " PRs"
       , ", ", show $ prgMergedPRCount prGroup, " merged PRs"
       , "; average open time: ", maybe "N/A" (formatDiffTime . arOpenDuration) $ prgAverageResult prGroup
-      , " (ignoring weekends: ", maybe "N/A" (formatDiffTime . unWorkDiffTime . arOpenWorkDuration) $ prgAverageResult prGroup, ")"
+      , " (ignoring weekends: ", maybe "N/A" (formatDiffTime . arOpenWorkDuration) $ prgAverageResult prGroup, ")"
       ]
 
 saveSprintFiles :: Config -> [PullAnalysis] -> IO ()

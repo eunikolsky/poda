@@ -36,7 +36,8 @@ import qualified Database.Persist.Sqlite as SQL
 
 import Database
 import EventType
-import WorkDiffTime
+import WorkDiffTime hiding (regular, work)
+import qualified WorkDiffTime as WorkTime (regular, work)
 
 -- | A "raw" version of @PullEvent@ that can be decoded from JSON.
 -- Decoding @PullEvent@ directly doesn't work because:
@@ -73,11 +74,9 @@ parsePullEvents pullId value = do
 
 data PullAnalysis = PullAnalysis
   { pullAnalysisPull :: Pull
-  , pullAnalysisOpenTime :: Maybe (NominalDiffTime, WorkDiffTime)
+  , pullAnalysisOpenTime :: Maybe WorkDiffTime
   -- ^ Amount of time the PR was open (if merged). This is the time from open to merge time,
   -- regardless of any time it might have been closed in between.
-  -- FIXME make the type more reusable (e.g. store start&end times so that both types of
-  -- durations can be calculated later)
   }
   deriving Show
 
@@ -100,8 +99,8 @@ instance ToNamedRecord PullAnalysis where
     , "author" .= pullAuthor p
     , "created" .= pullCreated p
     , "merged" .= pullMerged p
-    , "open_time" .= fmap fst pullAnalysisOpenTime
-    , "work_open_time" .= fmap snd pullAnalysisOpenTime
+    , "open_time" .= fmap WorkTime.regular pullAnalysisOpenTime
+    , "work_open_time" .= fmap WorkTime.work pullAnalysisOpenTime
     ]
 
 instance DefaultOrdered PullAnalysis where
@@ -181,15 +180,8 @@ analyzePRs = fmap analyze
     analyze :: Pull -> PullAnalysis
     analyze pull@Pull { pullCreated, pullMerged } = PullAnalysis
       { pullAnalysisPull = pull
-      , pullAnalysisOpenTime = openTime pullCreated pullMerged
+      , pullAnalysisOpenTime = diffWorkTime <$> pullMerged <*> pure pullCreated
       }
-
-    openTime pullCreated maybePullMerged = do
-      pullMerged <- maybePullMerged
-      pure
-        ( pullMerged `diffUTCTime` pullCreated
-        , pullMerged `diffWorkTime` pullCreated
-        )
 
 printPRs :: [Pull] -> IO ()
 printPRs prs = printAll >> printRemaining
@@ -318,7 +310,7 @@ yearMonth d = YearMonth (y, m)
 
 data AverageResult = AverageResult
   { arOpenDuration :: NominalDiffTime
-  , arOpenWorkDuration :: WorkDiffTime
+  , arOpenWorkDuration :: NominalDiffTime -- FIXME use WorkDiffTime directly
   }
 
 data PRGroup = PRGroup
@@ -337,8 +329,8 @@ averageWorkOpenTimeByMonth pulls = mapSecond avgTime . extendYearMonth $ groups
       , prgMergedPRCount = length $ filter (isJust . pullMerged . pullAnalysisPull) prs
       , prgAverageResult = let merged = mapMaybe pullAnalysisOpenTime prs in
         AverageResult
-          <$> avg (map fst merged)
-          <*> (WorkDiffTime <$> avg (map (unWorkDiffTime . snd) merged))
+          <$> avg (map WorkTime.regular merged)
+          <*> avg (map WorkTime.work merged)
       }
 
 formatDiffTime :: NominalDiffTime -> String
