@@ -62,6 +62,11 @@ spec =
             pull = defaultDDI { fEvents = [markDraftEvent draftTime] }
         draftDuration pull `shouldBe` 2 * nominalDay
 
+      context "when PR is in draft state" $
+        it "calculates duration from created to merged" $ do
+          let pull = defaultDDI { fIsDraft = True }
+          draftDuration pull `shouldBe` 7 * nominalDay
+
     context "when PR is not merged" $ do
       let defaultUnmergedDDI = defaultDDI { fMerged = Nothing }
 
@@ -84,6 +89,7 @@ defaultDDI = FreeDDI
   { fCreated = utcTime "2022-01-01T00:00:00Z"
   , fMerged = Just $ utcTime "2022-01-08T00:00:00Z"
   , fEvents = []
+  , fIsDraft = False
   }
 
 markDraftEvent :: UTCTime -> PullEvent
@@ -106,12 +112,14 @@ data FreeDDI = FreeDDI
   { fCreated :: UTCTime
   , fMerged :: Maybe UTCTime
   , fEvents :: [PullEvent]
+  , fIsDraft :: Bool
   }
 
 instance DraftDurationInput FreeDDI where
   ddiCreated = fCreated
   ddiMerged = fMerged
   ddiEvents = fEvents
+  ddiIsDraft = fIsDraft
 
 -- | Parses @UTCTime@ from an ISO8601 string: @2022-12-31T23:59:59Z@.
 -- Fails if the string is not in the correct format.

@@ -16,11 +16,18 @@ class DraftDurationInput a where
   ddiCreated :: a -> UTCTime
   ddiMerged :: a -> Maybe UTCTime
   ddiEvents :: a -> [PullEvent]
+  -- | Describes the /current/ draft state of the PR, after all events.
+  ddiIsDraft :: a -> Bool
 
 -- | Calculates the draft duration of a PR.
 -- When a PR is marked as draft or ready for review, an event is created;
 -- we don't know the state of the PR at a point in time until we get an
 -- event after that time.
+--
+-- Warnings:
+-- * according to github's UI, it's not possible to merge a draft PR; however,
+-- @git@ doesn't care about PRs and so can merge the branch and close the PR,
+-- and /maybe/ the github API can do the same.
 --
 -- Assumptions:
 -- * there can't be 2+ events of the same type in a row.
@@ -43,7 +50,8 @@ draftDuration ddi = getSum . foldMap (Sum . pairDuration) $ adjacentPairs stateT
     pairDuration (StateTransition MarkedDraft draft, StateTransition Merged merged) = diffUTCTime merged draft
     pairDuration (StateTransition MarkedReady _, StateTransition Merged _) = 0
     pairDuration (StateTransition Created created, StateTransition MarkedReady ready) = diffUTCTime ready created
-    pairDuration (StateTransition Created _, StateTransition Merged _) = 0
+    pairDuration (StateTransition Created created, StateTransition Merged merged) =
+      if ddiIsDraft ddi then diffUTCTime merged created else 0
     pairDuration (StateTransition Created _, StateTransition MarkedDraft _) = 0
     pairDuration (x, c@(StateTransition Created _)) = error . mconcat $ ["pairDuration: impossible ", show c, " after ", show x]
     pairDuration (m@(StateTransition Merged _), x) = error . mconcat $ ["pairDuration: impossible ", show x, " after ", show m]
