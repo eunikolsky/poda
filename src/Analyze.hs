@@ -25,10 +25,8 @@ class DraftTimeInput a where
 -- Assumptions:
 -- * there can't be 2+ events of the same type in a row.
 draftDuration :: (HasCallStack, DraftTimeInput a) => a -> NominalDiffTime
-draftDuration dti = getSum . mconcat . fmap Sum $ draftDurations
+draftDuration dti = getSum . foldMap (Sum . pairDuration) $ adjacentPairs stateTransitions
   where
-    draftDurations = map pairDuration $ adjacentPairs stateTransitions
-
     stateTransitions = catMaybes
       $ Just (StateTransition Created (dtiCreated dti))
       : map parseStateEvent (dtiEvents dti)
