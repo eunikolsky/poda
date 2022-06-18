@@ -1,14 +1,15 @@
+{-# OPTIONS_GHC -Wno-orphans #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TypeApplications #-}
 
 module Lib where
 
 import Control.Monad
 import Control.Monad.IO.Class
-import Control.Monad.Reader
 import Data.Aeson hiding ((.=))
 import Data.Aeson.Types hiding ((.=))
 import Data.ByteString (ByteString)
@@ -21,15 +22,13 @@ import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Data.Time
 import Data.Time.Format.ISO8601 (iso8601Show)
-import Database.Persist.Sqlite
-import Database.Persist.TH
-import GHC.Generics
+import Database.Persist.Sqlite hiding (upsert)
+import GHC.Generics hiding (from, to)
 import Network.HTTP.Client
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types
 import Text.Printf (printf)
 import qualified Data.Bifunctor (second)
-import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Ord (Down(..))
@@ -94,7 +93,7 @@ instance ToField UTCTime where
 
 -- | This allows to encode a @NominalDiffTime@ value into a CSV record.
 instance ToField NominalDiffTime where
-  toField = C.pack . show . truncate . realToFrac
+  toField = C.pack . show @Int . truncate @Double . realToFrac
 
 instance ToNamedRecord PullAnalysis where
   toNamedRecord PullAnalysis { pullAnalysisPull = p, pullAnalysisOpenTime } = namedRecord
@@ -168,8 +167,8 @@ listPRs config = do
         , "/issues?per_page=100&state=all&", parameter
         ]
       }
-      flip unfoldrM link $ \link -> do
-        request <- githubRequest config link
+      flip unfoldrM link $ \nextLink -> do
+        request <- githubRequest config nextLink
         response <- cachedHTTPLbs request manager
 
         pure
@@ -287,10 +286,10 @@ githubRequest config (GithubPath githubPath) = do
     ] }
 
 parseRelLink :: Text -> Text -> Maybe Text
-parseRelLink rel text = findRel rel rels
+parseRelLink rel text = findRel rels
   where
-    findRel rel = safeHead . mapMaybe (isRel rel)
-    isRel rel = (\[url, r] -> if r == "rel=\"" <> rel <> "\""
+    findRel = safeHead . mapMaybe isRel
+    isRel = (\[url, r] -> if r == "rel=\"" <> rel <> "\""
       then T.stripPrefix "<" =<< T.stripSuffix ">" url
       else Nothing) . T.splitOn "; "
     rels = filter (not . T.null) . T.splitOn ", " $ text
