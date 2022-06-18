@@ -4,6 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TypeApplications #-}
 
 module Lib where
 
@@ -90,6 +91,11 @@ instance Ord PullAnalysis where
 -- TODO remove orphan instances
 instance ToField UTCTime where
   toField = C.pack . iso8601Show
+
+-- TODO remove orphan instances
+-- | This allows to encode a @NominalDiffTime@ value into a CSV record.
+instance ToField NominalDiffTime where
+  toField = C.pack . show @Int . truncate @Double . realToFrac
 
 instance ToNamedRecord PullAnalysis where
   toNamedRecord PullAnalysis { pullAnalysisPull = p, pullAnalysisOpenTime } = namedRecord
