@@ -3,11 +3,14 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeApplications #-}
 
 module Lib where
 
+import Control.Concurrent
+import Control.Exception (BlockedIndefinitelyOnMVar, catch)
 import Control.Monad
 import Control.Monad.IO.Class
 import Data.Aeson hiding ((.=))
@@ -27,6 +30,7 @@ import GHC.Generics hiding (from, to)
 import Network.HTTP.Client
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types
+import System.IO (hPutStrLn, stderr)
 import Text.Printf (printf)
 import qualified Data.Bifunctor (second)
 import qualified Data.ByteString.Char8 as C
@@ -147,11 +151,17 @@ listPRs config = do
   authorsPRs <- traverse (`listAuthorPRs` manager) (configLocalTeam config)
   let prs = sortByNumberDesc . nub $ labeledPRs ++ concat authorsPRs
 
-  runSqlite dbPath $ do
+  prKeys <- runSqlite dbPath $ do
     -- delete all existing PRs first so that the uniqueness constraint doesn't block the insert;
     -- older PRs can't be lost because we always get the list of all PRs above
     deleteWhere ([] :: [Filter Pull])
-    insertMany_ prs
+    insertMany prs
+
+  events <- downloadAllPREvents config manager $ zip prs prKeys
+
+  runSqlite dbPath $ do
+    deleteWhere ([] :: [Filter PullEvent])
+    insertMany_ . concatMap snd $ events
 
   pure prs
 
@@ -171,6 +181,7 @@ listPRs config = do
       }
       flip unfoldrM link $ \nextLink -> do
         request <- githubRequest config nextLink
+        logStr $ show nextLink
         response <- cachedHTTPLbs request manager
 
         pure
@@ -179,6 +190,73 @@ listPRs config = do
           )
 
     sortByNumberDesc = sortOn (Data.Ord.Down . pullNumber)
+
+logStr :: String -> IO ()
+logStr = hPutStrLn stderr <=< addTime
+  where
+    addTime s = (\t tz -> mconcat [show . snd . utcToLocalTimeOfDay tz . timeToTimeOfDay . utctDayTime $ t, " ", s])
+      <$> getCurrentTime
+      <*> getCurrentTimeZone
+
+data ChanInput a = Value a | End
+
+-- FIXME I hate how I have to pass Key separately because it's required by PullEvent;
+-- on the other hand, Pull as is doesn't know its events…
+-- TODO use Reader?
+downloadAllPREvents :: Config -> Manager -> [(Pull, SQL.Key Pull)] -> IO [(Pull, [PullEvent])]
+downloadAllPREvents config manager pulls = do
+  keyedPullChan <- newChan
+  resultsChan <- newChan :: IO (Chan (Pull, [PullEvent]))
+  endCounter <- newQSemN 0
+  logLock <- newMVar ()
+
+  let numWorkers = 4
+      workersIdx = [0 .. numWorkers-1]
+
+      worker idx = do
+        input <- readChan keyedPullChan
+        case input of
+          Value keyedPull@(pull@(Pull { pullEventsUrl }), _) -> do
+            withMVar logLock . const . logStr $ mconcat ["#", show idx, ": ", show pullEventsUrl]
+            events <- downloadPREvents config manager keyedPull
+            writeChan resultsChan (pull, events)
+            worker idx
+
+          End -> signalQSemN endCounter 1
+
+  forM_ workersIdx $ forkIO . worker
+  forM_ (Value <$> pulls) $ writeChan keyedPullChan
+
+  forM_ workersIdx . const $ writeChan keyedPullChan End
+  waitQSemN endCounter numWorkers
+
+  getAvailableChanContents resultsChan
+
+-- | Gets all available `Chan` contents until it's empty.
+getAvailableChanContents :: forall a. Chan a -> IO [a]
+getAvailableChanContents chan = reverse <$> iter []
+  where
+    iter :: [a] -> IO [a]
+    iter res = do
+      -- this seems like a hack, but it works
+      x <- (Just <$> readChan chan) `catch` (\(_ :: BlockedIndefinitelyOnMVar) -> pure Nothing)
+      case x of
+        Just x' -> iter (x' : res)
+        Nothing -> pure res
+
+downloadPREvents :: Config -> Manager -> (Pull, SQL.Key Pull) -> IO [PullEvent]
+downloadPREvents config manager (Pull { pullEventsUrl }, key) = do
+  let link = GithubPath . mconcat $ [pullEventsUrl, "?per_page=100"]
+  request <- githubRequest config link
+  response <- cachedHTTPLbs request manager
+
+  when (isJust $ httpRNextLink response) .
+    error $ "downloadPREvents: TODO: implement pagination " <> show (httpRNextLink response)
+
+  let events = eitherDecode (httpRData response) >>= parsePullEvents key
+  case events of
+    Right event -> pure event
+    Left err -> error . mconcat $ ["downloadPREvents: parsing events from ", show link, " failed: ", show err]
 
 analyzePRs :: [Pull] -> [PullAnalysis]
 analyzePRs = fmap analyze
@@ -214,16 +292,16 @@ data HTTPResponse = HTTPResponse
   }
 
 cachedHTTPLbs :: Request -> Manager -> IO HTTPResponse
-cachedHTTPLbs req mgr = runSqlite dbPath $ do
+cachedHTTPLbs req mgr = do
   let url = T.pack . show . getUri $ req
-  maybeCachedResponse <- selectFirst [CachedResponseUrl ==. url] []
+      withConcurrentSqlite = runSqlite dbPath . retryOnBusy
+  maybeCachedResponse <- withConcurrentSqlite $ selectFirst [CachedResponseUrl ==. url] []
   let reqWithCache = applyCachedResponse (entityVal <$> maybeCachedResponse) req
   -- liftIO . putStrLn $ mconcat ["URL ", T.unpack url, " etag: ", maybe "N/A" show (maybeCachedResponse >>= cachedResponseETag . entityVal)]
 
   resp <- liftIO $ httpLbs reqWithCache mgr
 
-  let upsert = maybe insert_ (replace . entityKey) maybeCachedResponse
-      eTag = lookup "ETag" $ responseHeaders resp
+  let eTag = lookup "ETag" $ responseHeaders resp
       lastModified = lookup "Last-Modified" $ responseHeaders resp
       hasETagOrLastModified = isJust eTag || isJust lastModified
 
@@ -239,14 +317,16 @@ cachedHTTPLbs req mgr = runSqlite dbPath $ do
 
       when (statusIsSuccessful (responseStatus resp) && hasETagOrLastModified) $ do
         now <- liftIO getCurrentTime
-        upsert $ CachedResponse
-          { cachedResponseUrl = url
-          , cachedResponseData = BL.toStrict $ responseBody resp
-          , cachedResponseNextLink = nextLink
-          , cachedResponseETag = decodeUtf8 <$> eTag
-          , cachedResponseLastModified = lastModified >>= parseLastModified
-          , cachedResponseCreated = now
-          }
+        withConcurrentSqlite $ do
+          let upsert = maybe insert_ (replace . entityKey) maybeCachedResponse
+          upsert $ CachedResponse
+            { cachedResponseUrl = url
+            , cachedResponseData = BL.toStrict $ responseBody resp
+            , cachedResponseNextLink = nextLink
+            , cachedResponseETag = decodeUtf8 <$> eTag
+            , cachedResponseLastModified = lastModified >>= parseLastModified
+            , cachedResponseCreated = now
+            }
 
       pure $ HTTPResponse
         { httpRData = responseBody resp

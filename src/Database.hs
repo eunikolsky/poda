@@ -40,6 +40,7 @@ share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
     title Text
     url Text
     author Text
+    eventsUrl Text
     created UTCTime
     merged UTCTime Maybe
     UniqueNumber number
@@ -50,6 +51,7 @@ share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
     type EventType
     created UTCTime
     pull PullId OnDeleteCascade
+    UniqueGhId ghId
     deriving Show
 |]
 
@@ -67,9 +69,10 @@ instance FromJSON Pull where
     pullTitle <- v .: "title"
     pullUrl <- v .: "pull_request" >>= (.: "html_url")
     pullAuthor <- v .: "user" >>= (.: "login")
+    pullEventsUrl <- v .: "events_url"
     pullCreated <- v .: "created_at"
     pullMerged <- v .: "pull_request" >>= (.: "merged_at")
-    pure $ Pull { pullNumber, pullTitle, pullUrl, pullAuthor, pullCreated, pullMerged }
+    pure $ Pull { pullNumber, pullTitle, pullUrl, pullAuthor, pullEventsUrl, pullCreated, pullMerged }
 
 markReadyTime :: PullEvent -> Maybe UTCTime
 markReadyTime PullEvent { pullEventType = MarkReady, pullEventCreated } = Just pullEventCreated
