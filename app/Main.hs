@@ -17,13 +17,13 @@ main = do
   args <- getArgs
   case args of
     ["--drop-derived-tables"] -> dropDerivedTables
-    _ -> analyze
+    _ -> run
 
-analyze :: IO ()
-analyze = do
+run :: IO ()
+run = do
   config <- loadConfig
   migrateDB
-  a <- analyzePRs <$> listPRs config
+  a <- fmap analyze <$> listPRs config
 
   BL.writeFile "pulls.csv" $ encodeDefaultOrderedByName a
   saveSprintFiles config a
@@ -38,6 +38,7 @@ printOpenTimes a =
       , ", ", show $ prgMergedPRCount prGroup, " merged PRs"
       , "; average open time: ", maybe "N/A" (formatDiffTime . arOpenDuration) $ prgAverageResult prGroup
       , " (ignoring weekends: ", maybe "N/A" (formatDiffTime . arOpenWorkDuration) $ prgAverageResult prGroup, ")"
+      , "; avg draft duration ignoring weekends: ", maybe "0" formatDiffTime $ prgAverageWorkDraftDuration prGroup
       ]
 
 saveSprintFiles :: Config -> [PullAnalysis] -> IO ()

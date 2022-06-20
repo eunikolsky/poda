@@ -1,4 +1,4 @@
-{-# OPTIONS_GHC -Wno-orphans #-}
+{-# OPTIONS_GHC -Wno-orphans -Werror=missing-fields -Werror=missing-methods #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -39,6 +39,7 @@ import qualified Data.Ord (Down(..))
 import qualified Data.Text as T
 import qualified Database.Persist.Sqlite as SQL
 
+import Analyze
 import Database
 import EventType
 import WorkDiffTime hiding (regular, work)
@@ -82,6 +83,8 @@ data PullAnalysis = PullAnalysis
   , pullAnalysisOpenTime :: Maybe WorkDiffTime
   -- ^ Amount of time the PR was open (if merged). This is the time from open to merge time,
   -- regardless of any time it might have been closed in between.
+  , pullAnalysisDraftDuration :: Maybe WorkDiffTime
+  -- ^ Total amount of time the PR was in draft.
   }
   deriving Show
 
@@ -91,6 +94,20 @@ instance Eq PullAnalysis where
 
 instance Ord PullAnalysis where
   compare = comparing pullAnalysisPull
+
+-- | A model @Pull@ with its events.
+-- (It doesn't seem possible to get a @Pull@ with all its events from @persist@)
+data MPull = MPull
+  { mpPull :: Pull
+  , mpEvents :: [PullEvent]
+  }
+  deriving Show
+
+instance DraftDurationInput MPull where
+  ddiCreated = pullCreated . mpPull
+  ddiMerged = pullMerged . mpPull
+  ddiEvents = mpEvents
+  ddiIsDraft = pullIsDraft . mpPull
 
 -- TODO remove orphan instances
 instance ToField UTCTime where
@@ -102,7 +119,7 @@ instance ToField NominalDiffTime where
   toField = C.pack . show @Int . truncate @Double . realToFrac
 
 instance ToNamedRecord PullAnalysis where
-  toNamedRecord PullAnalysis { pullAnalysisPull = p, pullAnalysisOpenTime } = namedRecord
+  toNamedRecord PullAnalysis { pullAnalysisPull = p, pullAnalysisOpenTime, pullAnalysisDraftDuration } = namedRecord
     [ "number" .= pullNumber p
     , "title" .= pullTitle p
     , "url" .= pullUrl p
@@ -111,10 +128,16 @@ instance ToNamedRecord PullAnalysis where
     , "merged" .= pullMerged p
     , "open_time" .= fmap WorkTime.regular pullAnalysisOpenTime
     , "work_open_time" .= fmap WorkTime.work pullAnalysisOpenTime
+    , "draft_time" .= fmap WorkTime.regular pullAnalysisDraftDuration
+    , "work_draft_time" .= fmap WorkTime.work pullAnalysisDraftDuration
     ]
 
 instance DefaultOrdered PullAnalysis where
-  headerOrder _ = header ["number", "title", "url", "author", "created", "merged", "open_time", "work_open_time"]
+  headerOrder _ = header
+    [ "number", "title", "url", "author", "created", "merged"
+    , "open_time", "work_open_time"
+    , "draft_time", "work_draft_time"
+    ]
 
 -- | Configuration information for the program.
 data Config = Config
@@ -143,7 +166,7 @@ instance FromJSON Repo where
 -- | List PRs in a repository when:
 -- * they have the given @configLabel@;
 -- * or they are created by a member of the @configLocalTeam@.
-listPRs :: Config -> IO [Pull]
+listPRs :: Config -> IO [MPull]
 listPRs config = do
   manager <- newManager tlsManagerSettings
 
@@ -157,13 +180,13 @@ listPRs config = do
     deleteWhere ([] :: [Filter Pull])
     insertMany prs
 
-  events <- downloadAllPREvents config manager $ zip prs prKeys
+  mPulls <- downloadAllPREvents config manager $ zip prs prKeys
 
   runSqlite dbPath $ do
     deleteWhere ([] :: [Filter PullEvent])
-    insertMany_ . concatMap snd $ events
+    insertMany_ . concatMap mpEvents $ mPulls
 
-  pure prs
+  pure mPulls
 
   where
     listLabeledPRs :: Manager -> IO [Pull]
@@ -203,10 +226,10 @@ data ChanInput a = Value a | End
 -- FIXME I hate how I have to pass Key separately because it's required by PullEvent;
 -- on the other hand, Pull as is doesn't know its events…
 -- TODO use Reader?
-downloadAllPREvents :: Config -> Manager -> [(Pull, SQL.Key Pull)] -> IO [(Pull, [PullEvent])]
+downloadAllPREvents :: Config -> Manager -> [(Pull, SQL.Key Pull)] -> IO [MPull]
 downloadAllPREvents config manager pulls = do
   keyedPullChan <- newChan
-  resultsChan <- newChan :: IO (Chan (Pull, [PullEvent]))
+  resultsChan <- newChan :: IO (Chan MPull)
   endCounter <- newQSemN 0
   logLock <- newMVar ()
 
@@ -219,7 +242,7 @@ downloadAllPREvents config manager pulls = do
           Value keyedPull@(pull@(Pull { pullEventsUrl }), _) -> do
             withMVar logLock . const . logStr $ mconcat ["#", show idx, ": ", show pullEventsUrl]
             events <- downloadPREvents config manager keyedPull
-            writeChan resultsChan (pull, events)
+            writeChan resultsChan $ MPull pull events
             worker idx
 
           End -> signalQSemN endCounter 1
@@ -258,14 +281,12 @@ downloadPREvents config manager (Pull { pullEventsUrl }, key) = do
     Right event -> pure event
     Left err -> error . mconcat $ ["downloadPREvents: parsing events from ", show link, " failed: ", show err]
 
-analyzePRs :: [Pull] -> [PullAnalysis]
-analyzePRs = fmap analyze
-  where
-    analyze :: Pull -> PullAnalysis
-    analyze pull@Pull { pullCreated, pullMerged } = PullAnalysis
-      { pullAnalysisPull = pull
-      , pullAnalysisOpenTime = diffWorkTime <$> pullMerged <*> pure pullCreated
-      }
+analyze :: MPull -> PullAnalysis
+analyze mPull@MPull { mpPull = pull@(Pull { pullCreated, pullMerged }) } = PullAnalysis
+  { pullAnalysisPull = pull
+  , pullAnalysisOpenTime = diffWorkTime <$> pullMerged <*> pure pullCreated
+  , pullAnalysisDraftDuration = draftDuration mPull
+  }
 
 printPRs :: [Pull] -> IO ()
 printPRs prs = printAll >> printRemaining
@@ -397,6 +418,7 @@ data PRGroup = PRGroup
   { prgPRCount :: Int
   , prgMergedPRCount :: Int
   , prgAverageResult :: Maybe AverageResult
+  , prgAverageWorkDraftDuration :: Maybe NominalDiffTime
   }
 
 averageWorkOpenTimeByMonth :: [PullAnalysis] -> [(YearMonth, PRGroup)]
@@ -411,6 +433,9 @@ averageWorkOpenTimeByMonth pulls = mapSecond avgTime . extendYearMonth $ groups
         AverageResult
           <$> avg (map WorkTime.regular merged)
           <*> avg (map WorkTime.work merged)
+      , prgAverageWorkDraftDuration =
+          let draftDurations :: [NominalDiffTime] = mapMaybe (fmap WorkTime.work . pullAnalysisDraftDuration) prs
+          in avg draftDurations
       }
 
 formatDiffTime :: NominalDiffTime -> String

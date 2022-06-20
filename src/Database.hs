@@ -7,6 +7,7 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -41,9 +42,10 @@ share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
     title Text
     url Text
     author Text
-    eventsUrl Text
+    isDraft Bool
     created UTCTime
     merged UTCTime Maybe
+    eventsUrl Text
     UniqueNumber number
     deriving Show
 
@@ -70,10 +72,11 @@ instance FromJSON Pull where
     pullTitle <- v .: "title"
     pullUrl <- v .: "pull_request" >>= (.: "html_url")
     pullAuthor <- v .: "user" >>= (.: "login")
-    pullEventsUrl <- v .: "events_url"
+    pullIsDraft <- v .: "draft"
     pullCreated <- v .: "created_at"
     pullMerged <- v .: "pull_request" >>= (.: "merged_at")
-    pure $ Pull { pullNumber, pullTitle, pullUrl, pullAuthor, pullEventsUrl, pullCreated, pullMerged }
+    pullEventsUrl <- v .: "events_url"
+    pure $ Pull {..}
 
 markReadyTime :: PullEvent -> Maybe UTCTime
 markReadyTime PullEvent { pullEventType = MarkReady, pullEventCreated } = Just pullEventCreated
