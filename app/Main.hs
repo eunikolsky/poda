@@ -8,6 +8,7 @@ import System.Exit (die)
 import System.FilePath ((</>))
 import qualified Data.ByteString.Lazy as BL (writeFile)
 
+import Database
 import Lib
 
 main :: IO ()

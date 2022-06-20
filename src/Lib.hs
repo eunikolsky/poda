@@ -283,9 +283,6 @@ fromOurTeam config Pull { pullAuthor } = pullAuthor `elem` configLocalTeam confi
 newtype GithubPath = GithubPath Text
   deriving Show
 
-dbPath :: Text
-dbPath = "cache.sqlite"
-
 data HTTPResponse = HTTPResponse
   { httpRData :: BL.ByteString
   , httpRNextLink :: Maybe Text
@@ -346,9 +343,6 @@ parseLastModified = parseTimeM False defaultTimeLocale rfc2616DateFormat . C.unp
 
 rfc2616DateFormat :: String
 rfc2616DateFormat = "%a, %d %b %Y %T GMT"
-
-migrateDB :: IO ()
-migrateDB = runSqlite dbPath $ runMigration migrateAll
 
 githubRequest :: Config -> GithubPath -> IO Request
 githubRequest config (GithubPath githubPath) = do

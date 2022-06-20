@@ -81,3 +81,9 @@ markReadyTime _ = Nothing
 markDraftTime :: PullEvent -> Maybe UTCTime
 markDraftTime PullEvent { pullEventType = MarkDraft, pullEventCreated } = Just pullEventCreated
 markDraftTime _ = Nothing
+
+dbPath :: Text
+dbPath = "cache.sqlite"
+
+migrateDB :: IO ()
+migrateDB = runSqlite dbPath $ runMigration migrateAll
