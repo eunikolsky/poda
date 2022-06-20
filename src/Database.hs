@@ -14,6 +14,7 @@
 
 module Database where
 
+import Control.Monad
 import Data.Aeson
 import Data.Time
 import Data.ByteString (ByteString)
@@ -87,3 +88,13 @@ dbPath = "cache.sqlite"
 
 migrateDB :: IO ()
 migrateDB = runSqlite dbPath $ runMigration migrateAll
+
+-- | Drops the tables that can be derived from the network responses, that is everything except
+-- `CachedResponse` (they are derived because if you still have the filled in `CachedResponse`,
+-- it's faster to parse the PR information from the cache (and not increase the request count
+-- against the rate limit) than to download everything from scratch). If you need to make an
+-- incompatible change in that one and don't provide a migration, you can just @rm -f cache.sqlite@.
+dropDerivedTables :: IO ()
+dropDerivedTables = runSqlite dbPath $
+  -- FIXME how to get table names from persistent?
+  forM_ ["pull_event", "pull"] $ flip rawExecute [] . ("DROP TABLE " <>)

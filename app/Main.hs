@@ -4,6 +4,7 @@ import Control.Monad (forM_, unless)
 import Data.Aeson (eitherDecodeFileStrict')
 import Data.Csv (encodeDefaultOrderedByName)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
+import System.Environment (getArgs)
 import System.Exit (die)
 import System.FilePath ((</>))
 import qualified Data.ByteString.Lazy as BL (writeFile)
@@ -13,6 +14,13 @@ import Lib
 
 main :: IO ()
 main = do
+  args <- getArgs
+  case args of
+    ["--drop-derived-tables"] -> dropDerivedTables
+    _ -> analyze
+
+analyze :: IO ()
+analyze = do
   config <- loadConfig
   migrateDB
   a <- analyzePRs <$> listPRs config
