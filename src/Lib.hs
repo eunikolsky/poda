@@ -17,7 +17,6 @@ import Data.Aeson hiding ((.=))
 import Data.Aeson.Types hiding ((.=))
 import Data.ByteString (ByteString)
 import Data.Csv ((.=), DefaultOrdered, ToField, ToNamedRecord, header, headerOrder, namedRecord, toField, toNamedRecord)
-import Data.Function (on)
 import Data.List
 import Data.Maybe
 import Data.Ord (comparing)
@@ -31,7 +30,6 @@ import Network.HTTP.Client
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types
 import System.IO (hPutStrLn, stderr)
-import Text.Printf (printf)
 import qualified Data.Bifunctor (second)
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
@@ -399,16 +397,6 @@ avg :: Fractional a => [a] -> Maybe a
 avg [] = Nothing
 avg xs = Just (sum xs / genericLength xs)
 
-newtype YearMonth = YearMonth (Integer, Int)
-  deriving Eq
-
-instance Show YearMonth where
-  show (YearMonth (year, month)) = printf "%04d-%02d" year month
-
-yearMonth :: Day -> YearMonth
-yearMonth d = YearMonth (y, m)
-  where (y, m, _) = toGregorian d
-
 data AverageResult = AverageResult
   { arOpenDuration :: NominalDiffTime
   , arOpenWorkDuration :: NominalDiffTime
@@ -421,22 +409,18 @@ data PRGroup = PRGroup
   , prgAverageWorkDraftDuration :: Maybe NominalDiffTime
   }
 
-averageWorkOpenTimeByMonth :: [PullAnalysis] -> [(YearMonth, PRGroup)]
-averageWorkOpenTimeByMonth pulls = mapSecond avgTime . extendYearMonth $ groups
-  where
-    groups = groupBy ((==) `on` yearMonth . utctDay . pullCreated . pullAnalysisPull) pulls
-    extendYearMonth = fmap (\xs@(PullAnalysis { pullAnalysisPull = Pull { pullCreated } } : _) -> (yearMonth $ utctDay pullCreated, xs))
-    avgTime prs = PRGroup
-      { prgPRCount = length prs
-      , prgMergedPRCount = length $ filter (isJust . pullMerged . pullAnalysisPull) prs
-      , prgAverageResult = let merged = mapMaybe pullAnalysisOpenTime prs in
-        AverageResult
-          <$> avg (map WorkTime.regular merged)
-          <*> avg (map WorkTime.work merged)
-      , prgAverageWorkDraftDuration =
-          let draftDurations :: [NominalDiffTime] = mapMaybe (fmap WorkTime.work . pullAnalysisDraftDuration) prs
-          in avg draftDurations
-      }
+averageWorkOpenTime :: [PullAnalysis] -> PRGroup
+averageWorkOpenTime prs = PRGroup
+  { prgPRCount = length prs
+  , prgMergedPRCount = length $ filter (isJust . pullMerged . pullAnalysisPull) prs
+  , prgAverageResult = let merged = mapMaybe pullAnalysisOpenTime prs in
+    AverageResult
+      <$> avg (map WorkTime.regular merged)
+      <*> avg (map WorkTime.work merged)
+  , prgAverageWorkDraftDuration =
+      let draftDurations :: [NominalDiffTime] = mapMaybe (fmap WorkTime.work . pullAnalysisDraftDuration) prs
+      in avg draftDurations
+  }
 
 formatDiffTime :: NominalDiffTime -> String
 formatDiffTime = formatTime defaultTimeLocale "%ww %Dd %H:%M"
