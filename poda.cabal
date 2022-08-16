@@ -27,6 +27,7 @@ library
   exposed-modules:
       Analyze
       Conc
+      Concurrency
       Database
       EventType
       Lib

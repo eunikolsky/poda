@@ -2,11 +2,11 @@
 
 module Conc where
 
-import Control.Concurrent.Async (forConcurrently)
-import Control.Concurrent (threadDelay, newMVar, withMVar, newQSemN, signalQSemN, waitQSemN)
-import Control.Exception (bracket_)
+import Control.Concurrent (threadDelay, newMVar, withMVar)
 import Control.Monad
 import Data.Time
+
+import Concurrency
 
 newtype Input = Value Int
 
@@ -36,14 +36,3 @@ conc = do
   output <- forConcurrentlyN (MaxResources 4) input worker
 
   lPutStrLn $ "done; received: " <> show output
-
-newtype MaxResources = MaxResources Int
-
--- | `Control.Concurrent.Async.forConcurrently` with limited concurrency — at most `MaxResources`
--- functions `f` can be run simultaneously.
-forConcurrentlyN :: Traversable t => MaxResources -> t a -> (a -> IO b) -> IO (t b)
-forConcurrentlyN (MaxResources maxResources) xs f = do
-  resourceAvailable <- newQSemN maxResources
-
-  forConcurrently xs $
-    bracket_ (waitQSemN resourceAvailable 1) (signalQSemN resourceAvailable 1) . f
