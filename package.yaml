@@ -25,6 +25,9 @@ dependencies:
 - bytestring
 - cassava
 
+ghc-options:
+- -Wall
+
 library:
   source-dirs: src
   dependencies:
@@ -61,4 +64,5 @@ tests:
     dependencies:
     - poda
     - hspec
+    - persistent-sqlite
     - time

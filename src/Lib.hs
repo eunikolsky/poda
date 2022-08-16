@@ -1,30 +1,22 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveAnyClass #-}
+{-# OPTIONS_GHC -Wno-orphans -Werror=missing-fields -Werror=missing-methods #-}
 {-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TupleSections #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE TypeApplications #-}
 
 module Lib where
 
+import Control.Concurrent
+import Control.Exception (BlockedIndefinitelyOnMVar, catch)
 import Control.Monad
 import Control.Monad.IO.Class
-import Control.Monad.Reader
 import Data.Aeson hiding ((.=))
+import Data.Aeson.Types hiding ((.=))
 import Data.ByteString (ByteString)
 import Data.Csv ((.=), DefaultOrdered, ToField, ToNamedRecord, header, headerOrder, namedRecord, toField, toNamedRecord)
-import Data.Function (on)
 import Data.List
 import Data.Maybe
 import Data.Ord (comparing)
@@ -32,65 +24,65 @@ import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Data.Time
 import Data.Time.Format.ISO8601 (iso8601Show)
-import Database.Persist.Sqlite
-import Database.Persist.TH
-import GHC.Generics
+import Database.Persist.Sqlite hiding (upsert)
+import GHC.Generics hiding (from, to)
 import Network.HTTP.Client
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types
-import Text.Printf (printf)
+import System.IO (hPutStrLn, stderr)
 import qualified Data.Bifunctor (second)
-import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Ord (Down(..))
 import qualified Data.Text as T
+import qualified Database.Persist.Sqlite as SQL
 
-share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
-  CachedResponse
-    url Text
-    data ByteString
-    nextLink Text Maybe
-    eTag Text Maybe sql=etag
-    lastModified UTCTime Maybe
-    created UTCTime default=CURRENT_TIME
-    UniqueURL url sql=unique_url
-    deriving Show
+import Analyze
+import Database
+import EventType
+import WorkDiffTime hiding (regular, work)
+import qualified WorkDiffTime as WorkTime (regular, work)
 
-  Pull
-    number Int
-    title Text
-    url Text
-    author Text
-    created UTCTime
-    merged UTCTime Maybe
-    UniqueNumber number
-    deriving Show
-|]
+-- | A "raw" version of @PullEvent@ that can be decoded from JSON.
+-- Decoding @PullEvent@ directly doesn't work because:
+-- 1. @parseJSON@ doesn't know the PR that the events are associated with;
+-- 2. we're only interested in a subset of event types, but I can't find a
+--    way to parse only "good" events from an array in JSON.
+data PullEventJSON = PullEventJSON
+  { pejId :: Int
+  , pejType :: Text
+  , pejCreated :: UTCTime
+  }
+  deriving (Show)
 
--- | @Pull@ equality is based on their numbers only. Other fields are assumed to be
--- the same no matter which API call they came from.
-instance Eq Pull where
-  Pull { pullNumber = number0 } == Pull { pullNumber = number1 } = number0 == number1
+instance FromJSON PullEventJSON where
+  parseJSON = withObject "PullEvent" $ \v -> PullEventJSON
+    <$> v .: "id"
+    <*> v .: "event"
+    <*> v .: "created_at"
 
-instance Ord Pull where
-  compare = comparing pullNumber
+pullEventFromJSON :: SQL.Key Pull -> PullEventJSON -> Maybe PullEvent
+pullEventFromJSON pullId PullEventJSON {..} = do
+  pullEventType <- mkEventType pejType
+  pure $ PullEvent
+    { pullEventGhId = pejId
+    , pullEventType = pullEventType
+    , pullEventCreated = pejCreated
+    , pullEventPull = pullId
+    }
 
-instance FromJSON Pull where
-  parseJSON = withObject "PR" $ \v -> do
-    pullNumber <- v .: "number"
-    pullTitle <- v .: "title"
-    pullUrl <- v .: "pull_request" >>= (.: "html_url")
-    pullAuthor <- v .: "user" >>= (.: "login")
-    pullCreated <- v .: "created_at"
-    pullMerged <- v .: "pull_request" >>= (.: "merged_at")
-    pure $ Pull { pullNumber, pullTitle, pullUrl, pullAuthor, pullCreated, pullMerged }
+parsePullEvents :: SQL.Key Pull -> Value -> Either String [PullEvent]
+parsePullEvents pullId value = do
+  eventJsons <- parseEither parseJSON value
+  pure $ mapMaybe (pullEventFromJSON pullId) eventJsons
 
 data PullAnalysis = PullAnalysis
   { pullAnalysisPull :: Pull
-  , pullAnalysisOpenTime :: Maybe (NominalDiffTime, WorkDiffTime)
+  , pullAnalysisOpenTime :: Maybe WorkDiffTime
   -- ^ Amount of time the PR was open (if merged). This is the time from open to merge time,
   -- regardless of any time it might have been closed in between.
+  , pullAnalysisDraftDuration :: Maybe WorkDiffTime
+  -- ^ Total amount of time the PR was in draft.
   }
   deriving Show
 
@@ -101,27 +93,49 @@ instance Eq PullAnalysis where
 instance Ord PullAnalysis where
   compare = comparing pullAnalysisPull
 
+-- | A model @Pull@ with its events.
+-- (It doesn't seem possible to get a @Pull@ with all its events from @persist@)
+data MPull = MPull
+  { mpPull :: Pull
+  , mpEvents :: [PullEvent]
+  }
+  deriving Show
+
+instance DraftDurationInput MPull where
+  ddiCreated = pullCreated . mpPull
+  ddiMerged = pullMerged . mpPull
+  ddiEvents = mpEvents
+  ddiIsDraft = pullIsDraft . mpPull
+
+-- TODO remove orphan instances
 instance ToField UTCTime where
   toField = C.pack . iso8601Show
 
+-- TODO remove orphan instances
 -- | This allows to encode a @NominalDiffTime@ value into a CSV record.
 instance ToField NominalDiffTime where
-  toField = C.pack . show . truncate . realToFrac
+  toField = C.pack . show @Int . truncate @Double . realToFrac
 
 instance ToNamedRecord PullAnalysis where
-  toNamedRecord PullAnalysis { pullAnalysisPull = p, pullAnalysisOpenTime } = namedRecord
+  toNamedRecord PullAnalysis { pullAnalysisPull = p, pullAnalysisOpenTime, pullAnalysisDraftDuration } = namedRecord
     [ "number" .= pullNumber p
     , "title" .= pullTitle p
     , "url" .= pullUrl p
     , "author" .= pullAuthor p
     , "created" .= pullCreated p
     , "merged" .= pullMerged p
-    , "open_time" .= fmap fst pullAnalysisOpenTime
-    , "work_open_time" .= fmap snd pullAnalysisOpenTime
+    , "open_time" .= fmap WorkTime.regular pullAnalysisOpenTime
+    , "work_open_time" .= fmap WorkTime.work pullAnalysisOpenTime
+    , "draft_time" .= fmap WorkTime.regular pullAnalysisDraftDuration
+    , "work_draft_time" .= fmap WorkTime.work pullAnalysisDraftDuration
     ]
 
 instance DefaultOrdered PullAnalysis where
-  headerOrder _ = header ["number", "title", "url", "author", "created", "merged", "open_time", "work_open_time"]
+  headerOrder _ = header
+    [ "number", "title", "url", "author", "created", "merged"
+    , "open_time", "work_open_time"
+    , "draft_time", "work_draft_time"
+    ]
 
 -- | Configuration information for the program.
 data Config = Config
@@ -150,7 +164,7 @@ instance FromJSON Repo where
 -- | List PRs in a repository when:
 -- * they have the given @configLabel@;
 -- * or they are created by a member of the @configLocalTeam@.
-listPRs :: Config -> IO [Pull]
+listPRs :: Config -> IO [MPull]
 listPRs config = do
   manager <- newManager tlsManagerSettings
 
@@ -158,13 +172,19 @@ listPRs config = do
   authorsPRs <- traverse (`listAuthorPRs` manager) (configLocalTeam config)
   let prs = sortByNumberDesc . nub $ labeledPRs ++ concat authorsPRs
 
-  runSqlite dbPath $ do
+  prKeys <- runSqlite dbPath $ do
     -- delete all existing PRs first so that the uniqueness constraint doesn't block the insert;
     -- older PRs can't be lost because we always get the list of all PRs above
     deleteWhere ([] :: [Filter Pull])
-    insertMany_ prs
+    insertMany prs
 
-  pure prs
+  mPulls <- downloadAllPREvents config manager $ zip prs prKeys
+
+  runSqlite dbPath $ do
+    deleteWhere ([] :: [Filter PullEvent])
+    insertMany_ . concatMap mpEvents $ mPulls
+
+  pure mPulls
 
   where
     listLabeledPRs :: Manager -> IO [Pull]
@@ -180,8 +200,9 @@ listPRs config = do
         , "/issues?per_page=100&state=all&", parameter
         ]
       }
-      flip unfoldrM link $ \link -> do
-        request <- githubRequest config link
+      flip unfoldrM link $ \nextLink -> do
+        request <- githubRequest config nextLink
+        logStr $ show nextLink
         response <- cachedHTTPLbs request manager
 
         pure
@@ -191,21 +212,79 @@ listPRs config = do
 
     sortByNumberDesc = sortOn (Data.Ord.Down . pullNumber)
 
-analyzePRs :: [Pull] -> [PullAnalysis]
-analyzePRs = fmap analyze
+logStr :: String -> IO ()
+logStr = hPutStrLn stderr <=< addTime
   where
-    analyze :: Pull -> PullAnalysis
-    analyze pull@Pull { pullCreated, pullMerged } = PullAnalysis
-      { pullAnalysisPull = pull
-      , pullAnalysisOpenTime = openTime pullCreated pullMerged
-      }
+    addTime s = (\t tz -> mconcat [show . snd . utcToLocalTimeOfDay tz . timeToTimeOfDay . utctDayTime $ t, " ", s])
+      <$> getCurrentTime
+      <*> getCurrentTimeZone
 
-    openTime pullCreated maybePullMerged = do
-      pullMerged <- maybePullMerged
-      pure
-        ( pullMerged `diffUTCTime` pullCreated
-        , pullMerged `diffWorkTime` pullCreated
-        )
+data ChanInput a = Value a | End
+
+-- FIXME I hate how I have to pass Key separately because it's required by PullEvent;
+-- on the other hand, Pull as is doesn't know its events…
+-- TODO use Reader?
+downloadAllPREvents :: Config -> Manager -> [(Pull, SQL.Key Pull)] -> IO [MPull]
+downloadAllPREvents config manager pulls = do
+  keyedPullChan <- newChan
+  resultsChan <- newChan :: IO (Chan MPull)
+  endCounter <- newQSemN 0
+  logLock <- newMVar ()
+
+  let numWorkers = 4
+      workersIdx = [0 .. numWorkers-1]
+
+      worker idx = do
+        input <- readChan keyedPullChan
+        case input of
+          Value keyedPull@(pull@(Pull { pullEventsUrl }), _) -> do
+            withMVar logLock . const . logStr $ mconcat ["#", show idx, ": ", show pullEventsUrl]
+            events <- downloadPREvents config manager keyedPull
+            writeChan resultsChan $ MPull pull events
+            worker idx
+
+          End -> signalQSemN endCounter 1
+
+  forM_ workersIdx $ forkIO . worker
+  forM_ (Value <$> pulls) $ writeChan keyedPullChan
+
+  forM_ workersIdx . const $ writeChan keyedPullChan End
+  waitQSemN endCounter numWorkers
+
+  getAvailableChanContents resultsChan
+
+-- | Gets all available `Chan` contents until it's empty.
+getAvailableChanContents :: forall a. Chan a -> IO [a]
+getAvailableChanContents chan = reverse <$> iter []
+  where
+    iter :: [a] -> IO [a]
+    iter res = do
+      -- this seems like a hack, but it works
+      x <- (Just <$> readChan chan) `catch` (\(_ :: BlockedIndefinitelyOnMVar) -> pure Nothing)
+      case x of
+        Just x' -> iter (x' : res)
+        Nothing -> pure res
+
+downloadPREvents :: Config -> Manager -> (Pull, SQL.Key Pull) -> IO [PullEvent]
+downloadPREvents config manager (Pull { pullEventsUrl }, key) = do
+  let link = GithubPath . mconcat $ [pullEventsUrl, "?per_page=100"]
+  request <- githubRequest config link
+  response <- cachedHTTPLbs request manager
+
+  when (isJust $ httpRNextLink response) .
+    error $ "downloadPREvents: TODO: implement pagination " <> show (httpRNextLink response)
+
+  let events = eitherDecode (httpRData response) >>= parsePullEvents key
+  case events of
+    Right event -> pure event
+    Left err -> error . mconcat $ ["downloadPREvents: parsing events from ", show link, " failed: ", show err]
+
+analyze :: MPull -> PullAnalysis
+analyze mPull@MPull { mpPull = pull@(Pull { pullCreated, pullMerged }) } = PullAnalysis
+  { pullAnalysisPull = pull
+  , pullAnalysisOpenTime = diffWorkTime <$> pullMerged <*> pure pullCreated
+  , pullAnalysisDraftDuration = draftDuration mPull
+  }
 
 printPRs :: [Pull] -> IO ()
 printPRs prs = printAll >> printRemaining
@@ -223,25 +302,22 @@ fromOurTeam config Pull { pullAuthor } = pullAuthor `elem` configLocalTeam confi
 newtype GithubPath = GithubPath Text
   deriving Show
 
-dbPath :: Text
-dbPath = "cache.sqlite"
-
 data HTTPResponse = HTTPResponse
   { httpRData :: BL.ByteString
   , httpRNextLink :: Maybe Text
   }
 
 cachedHTTPLbs :: Request -> Manager -> IO HTTPResponse
-cachedHTTPLbs req mgr = runSqlite dbPath $ do
+cachedHTTPLbs req mgr = do
   let url = T.pack . show . getUri $ req
-  maybeCachedResponse <- selectFirst [CachedResponseUrl ==. url] []
+      withConcurrentSqlite = runSqlite dbPath . retryOnBusy
+  maybeCachedResponse <- withConcurrentSqlite $ selectFirst [CachedResponseUrl ==. url] []
   let reqWithCache = applyCachedResponse (entityVal <$> maybeCachedResponse) req
   -- liftIO . putStrLn $ mconcat ["URL ", T.unpack url, " etag: ", maybe "N/A" show (maybeCachedResponse >>= cachedResponseETag . entityVal)]
 
   resp <- liftIO $ httpLbs reqWithCache mgr
 
-  let upsert = maybe insert_ (replace . entityKey) maybeCachedResponse
-      eTag = lookup "ETag" $ responseHeaders resp
+  let eTag = lookup "ETag" $ responseHeaders resp
       lastModified = lookup "Last-Modified" $ responseHeaders resp
       hasETagOrLastModified = isJust eTag || isJust lastModified
 
@@ -257,14 +333,16 @@ cachedHTTPLbs req mgr = runSqlite dbPath $ do
 
       when (statusIsSuccessful (responseStatus resp) && hasETagOrLastModified) $ do
         now <- liftIO getCurrentTime
-        upsert $ CachedResponse
-          { cachedResponseUrl = url
-          , cachedResponseData = BL.toStrict $ responseBody resp
-          , cachedResponseNextLink = nextLink
-          , cachedResponseETag = decodeUtf8 <$> eTag
-          , cachedResponseLastModified = lastModified >>= parseLastModified
-          , cachedResponseCreated = now
-          }
+        withConcurrentSqlite $ do
+          let upsert = maybe insert_ (replace . entityKey) maybeCachedResponse
+          upsert $ CachedResponse
+            { cachedResponseUrl = url
+            , cachedResponseData = BL.toStrict $ responseBody resp
+            , cachedResponseNextLink = nextLink
+            , cachedResponseETag = decodeUtf8 <$> eTag
+            , cachedResponseLastModified = lastModified >>= parseLastModified
+            , cachedResponseCreated = now
+            }
 
       pure $ HTTPResponse
         { httpRData = responseBody resp
@@ -285,9 +363,6 @@ parseLastModified = parseTimeM False defaultTimeLocale rfc2616DateFormat . C.unp
 rfc2616DateFormat :: String
 rfc2616DateFormat = "%a, %d %b %Y %T GMT"
 
-migrateDB :: IO ()
-migrateDB = runSqlite dbPath $ runMigration migrateAll
-
 githubRequest :: Config -> GithubPath -> IO Request
 githubRequest config (GithubPath githubPath) = do
   let token = configToken config
@@ -299,10 +374,10 @@ githubRequest config (GithubPath githubPath) = do
     ] }
 
 parseRelLink :: Text -> Text -> Maybe Text
-parseRelLink rel text = findRel rel rels
+parseRelLink rel text = findRel rels
   where
-    findRel rel = safeHead . mapMaybe (isRel rel)
-    isRel rel = (\[url, r] -> if r == "rel=\"" <> rel <> "\""
+    findRel = safeHead . mapMaybe isRel
+    isRel = (\[url, r] -> if r == "rel=\"" <> rel <> "\""
       then T.stripPrefix "<" =<< T.stripSuffix ">" url
       else Nothing) . T.splitOn "; "
     rels = filter (not . T.null) . T.splitOn ", " $ text
@@ -318,68 +393,34 @@ unfoldrM f = iter mempty
       let newAcc = acc <> a
       maybe (pure newAcc) (iter newAcc) next
 
--- | Represents a time duration calculated between two time points skipping
--- weekend days between them.
-newtype WorkDiffTime = WorkDiffTime { unWorkDiffTime :: NominalDiffTime }
-  deriving Eq
-
-instance Show WorkDiffTime where
-  show (WorkDiffTime dt) = mconcat ["WorkDiffTime ", show dt]
-
-instance ToField WorkDiffTime where
-  toField = toField . unWorkDiffTime
-
-diffWorkTime :: UTCTime -> UTCTime -> WorkDiffTime
-diffWorkTime to from = WorkDiffTime $ fullDiff - weekends
-  where
-    fromDay = utctDay from
-    toDay = utctDay to
-
-    fullDiff = diffUTCTime to from
-    weekends = (* nominalDay) . fromIntegral . length . filter isWeekend . fmap dayOfWeek $ [fromDay..toDay]
-
-    isWeekend Saturday = True
-    isWeekend Sunday = True
-    isWeekend _ = False
-
 avg :: Fractional a => [a] -> Maybe a
 avg [] = Nothing
 avg xs = Just (sum xs / genericLength xs)
 
-newtype YearMonth = YearMonth (Integer, Int)
-  deriving Eq
-
-instance Show YearMonth where
-  show (YearMonth (year, month)) = printf "%04d-%02d" year month
-
-yearMonth :: Day -> YearMonth
-yearMonth d = YearMonth (y, m)
-  where (y, m, _) = toGregorian d
-
 data AverageResult = AverageResult
   { arOpenDuration :: NominalDiffTime
-  , arOpenWorkDuration :: WorkDiffTime
+  , arOpenWorkDuration :: NominalDiffTime
   }
 
 data PRGroup = PRGroup
   { prgPRCount :: Int
   , prgMergedPRCount :: Int
   , prgAverageResult :: Maybe AverageResult
+  , prgAverageWorkDraftDuration :: Maybe NominalDiffTime
   }
 
-averageWorkOpenTimeByMonth :: [PullAnalysis] -> [(YearMonth, PRGroup)]
-averageWorkOpenTimeByMonth pulls = mapSecond avgTime . extendYearMonth $ groups
-  where
-    groups = groupBy ((==) `on` yearMonth . utctDay . pullCreated . pullAnalysisPull) pulls
-    extendYearMonth = fmap (\xs@(PullAnalysis { pullAnalysisPull = Pull { pullCreated } } : _) -> (yearMonth $ utctDay pullCreated, xs))
-    avgTime prs = PRGroup
-      { prgPRCount = length prs
-      , prgMergedPRCount = length $ filter (isJust . pullMerged . pullAnalysisPull) prs
-      , prgAverageResult = let merged = mapMaybe pullAnalysisOpenTime prs in
-        AverageResult
-          <$> avg (map fst merged)
-          <*> (WorkDiffTime <$> avg (map (unWorkDiffTime . snd) merged))
-      }
+averageWorkOpenTime :: [PullAnalysis] -> PRGroup
+averageWorkOpenTime prs = PRGroup
+  { prgPRCount = length prs
+  , prgMergedPRCount = length $ filter (isJust . pullMerged . pullAnalysisPull) prs
+  , prgAverageResult = let merged = mapMaybe pullAnalysisOpenTime prs in
+    AverageResult
+      <$> avg (map WorkTime.regular merged)
+      <*> avg (map WorkTime.work merged)
+  , prgAverageWorkDraftDuration =
+      let draftDurations :: [NominalDiffTime] = mapMaybe (fmap WorkTime.work . pullAnalysisDraftDuration) prs
+      in avg draftDurations
+  }
 
 formatDiffTime :: NominalDiffTime -> String
 formatDiffTime = formatTime defaultTimeLocale "%ww %Dd %H:%M"
