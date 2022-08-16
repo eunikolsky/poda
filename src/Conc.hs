@@ -12,9 +12,6 @@ newtype Input = Value Int
 
 conc :: IO ()
 conc = do
-  let maxResources = 4
-  resourceAvailable <- newQSemN maxResources
-
   -- lock for `purStrLn` so that we don't have interleaved output
   -- https://stackoverflow.com/questions/2981984/can-i-ensure-that-haskell-performs-atomic-io
   lock <- newMVar ()
@@ -28,12 +25,14 @@ conc = do
 
       worker :: Input -> IO ()
       worker (Value x) = do
-        lPutStrLn . mconcat $ ["worker waiting for available resource"]
-        bracket_ (waitQSemN resourceAvailable 1) (signalQSemN resourceAvailable 1) $ do
           lPutStrLn . mconcat $ ["worker got input ", show x]
           threadDelay $ x * 1000000
 
+  let maxResources = 4
+  resourceAvailable <- newQSemN maxResources
+
   lPutStrLn "starting workers"
-  forConcurrently_ input worker
+  forConcurrently_ input $
+    bracket_ (waitQSemN resourceAvailable 1) (signalQSemN resourceAvailable 1) . worker
 
   lPutStrLn "done"
