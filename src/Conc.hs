@@ -32,11 +32,18 @@ conc = do
         threadDelay $ x * 1000000
         pure i
 
-  let maxResources = 4
-  resourceAvailable <- newQSemN maxResources
-
   lPutStrLn "starting workers"
-  output <- forConcurrently input $
-    bracket_ (waitQSemN resourceAvailable 1) (signalQSemN resourceAvailable 1) . worker
+  output <- forConcurrentlyN (MaxResources 4) input worker
 
   lPutStrLn $ "done; received: " <> show output
+
+newtype MaxResources = MaxResources Int
+
+-- | `Control.Concurrent.Async.forConcurrently` with limited concurrency — at most `MaxResources`
+-- functions `f` can be run simultaneously.
+forConcurrentlyN :: Traversable t => MaxResources -> t a -> (a -> IO b) -> IO (t b)
+forConcurrentlyN (MaxResources maxResources) xs f = do
+  resourceAvailable <- newQSemN maxResources
+
+  forConcurrently xs $
+    bracket_ (waitQSemN resourceAvailable 1) (signalQSemN resourceAvailable 1) . f
