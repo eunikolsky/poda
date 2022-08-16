@@ -161,6 +161,9 @@ newtype Repo = Repo { unRepo :: Text }
 instance FromJSON Repo where
   parseJSON = fmap Repo . parseJSON
 
+maxConcurrentDownloads :: MaxResources
+maxConcurrentDownloads = MaxResources 4
+
 -- | List PRs in a repository when:
 -- * they have the given @configLabel@;
 -- * or they are created by a member of the @configLocalTeam@.
@@ -168,8 +171,11 @@ listPRs :: Config -> IO [MPull]
 listPRs config = do
   manager <- newManager tlsManagerSettings
 
-  labeledPRs <- listLabeledPRs manager
-  authorsPRs <- traverse (`listAuthorPRs` manager) (configLocalTeam config)
+  logLock <- newMVar ()
+
+  labeledPRs <- listLabeledPRs logLock manager
+  authorsPRs <- forConcurrentlyN maxConcurrentDownloads (configLocalTeam config) $ \author ->
+    listAuthorPRs logLock author manager
   let prs = sortByNumberDesc . nub $ labeledPRs ++ concat authorsPRs
 
   prKeys <- runSqlite dbPath $ do
@@ -187,14 +193,14 @@ listPRs config = do
   pure mPulls
 
   where
-    listLabeledPRs :: Manager -> IO [Pull]
-    listLabeledPRs = listPRs' $ "labels=" <> configLabel config
+    listLabeledPRs :: MVar () -> Manager -> IO [Pull]
+    listLabeledPRs logLock = listPRs' logLock $ "labels=" <> configLabel config
 
-    listAuthorPRs :: Text -> Manager -> IO [Pull]
-    listAuthorPRs author = listPRs' $ "creator=" <> author
+    listAuthorPRs :: MVar () -> Text -> Manager -> IO [Pull]
+    listAuthorPRs logLock author = listPRs' logLock $ "creator=" <> author
 
-    listPRs' :: Text -> Manager -> IO [Pull]
-    listPRs' parameter manager = do
+    listPRs' :: MVar () -> Text -> Manager -> IO [Pull]
+    listPRs' logLock parameter manager = do
       let { link = GithubPath . mconcat $
         [ "https://api.github.com/repos/", unRepo . configRepo $ config
         , "/issues?per_page=100&state=all&", parameter
@@ -202,7 +208,7 @@ listPRs config = do
       }
       flip unfoldrM link $ \nextLink -> do
         request <- githubRequest config nextLink
-        logStr $ show nextLink
+        logStr logLock $ show nextLink
         response <- cachedHTTPLbs request manager
 
         pure
@@ -212,9 +218,10 @@ listPRs config = do
 
     sortByNumberDesc = sortOn (Data.Ord.Down . pullNumber)
 
-logStr :: String -> IO ()
-logStr = hPutStrLn stderr <=< addTime
+logStr :: MVar () -> String -> IO ()
+logStr logLock = withMVar logLock . const . hPutStrLn stderr <=< addTime
   where
+    addTime :: String -> IO String
     addTime s = (\t tz -> mconcat [show . snd . utcToLocalTimeOfDay tz . timeToTimeOfDay . utctDayTime $ t, " ", s])
       <$> getCurrentTime
       <*> getCurrentTimeZone
@@ -229,11 +236,11 @@ downloadAllPREvents config manager pulls = do
   let
     worker :: (Pull, SQL.Key Pull) -> IO MPull
     worker keyedPull@(pull@(Pull { pullEventsUrl }), _) = do
-      withMVar logLock . const . logStr $ show pullEventsUrl
+      logStr logLock $ show pullEventsUrl
       events <- downloadPREvents config manager keyedPull
       pure $ MPull pull events
 
-  forConcurrentlyN (MaxResources 4) pulls worker
+  forConcurrentlyN maxConcurrentDownloads pulls worker
 
 downloadPREvents :: Config -> Manager -> (Pull, SQL.Key Pull) -> IO [PullEvent]
 downloadPREvents config manager (Pull { pullEventsUrl }, key) = do
