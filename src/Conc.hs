@@ -2,13 +2,16 @@
 
 module Conc where
 
-import Control.Concurrent.Async (forConcurrently_)
+import Control.Concurrent.Async (forConcurrently)
 import Control.Concurrent (threadDelay, newMVar, withMVar, newQSemN, signalQSemN, waitQSemN)
 import Control.Exception (bracket_)
 import Control.Monad
 import Data.Time
 
 newtype Input = Value Int
+
+instance Show Input where
+  show (Value i) = show i
 
 conc :: IO ()
 conc = do
@@ -23,16 +26,17 @@ conc = do
       lPutStrLn = withMVar lock . const . putStrLn <=< addTime
         where addTime s = (\t -> show (timeToTimeOfDay $ utctDayTime t) ++ ": " ++ s) <$> getCurrentTime
 
-      worker :: Input -> IO ()
-      worker (Value x) = do
-          lPutStrLn . mconcat $ ["worker got input ", show x]
-          threadDelay $ x * 1000000
+      worker :: Input -> IO Input
+      worker i@(Value x) = do
+        lPutStrLn . mconcat $ ["worker got input ", show x]
+        threadDelay $ x * 1000000
+        pure i
 
   let maxResources = 4
   resourceAvailable <- newQSemN maxResources
 
   lPutStrLn "starting workers"
-  forConcurrently_ input $
+  output <- forConcurrently input $
     bracket_ (waitQSemN resourceAvailable 1) (signalQSemN resourceAvailable 1) . worker
 
-  lPutStrLn "done"
+  lPutStrLn $ "done; received: " <> show output
