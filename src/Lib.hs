@@ -10,7 +10,6 @@
 module Lib where
 
 import Control.Concurrent
-import Control.Exception (BlockedIndefinitelyOnMVar, catch)
 import Control.Monad
 import Control.Monad.IO.Class
 import Data.Aeson hiding ((.=))
@@ -38,6 +37,7 @@ import qualified Data.Text as T
 import qualified Database.Persist.Sqlite as SQL
 
 import Analyze
+import Concurrency
 import Database
 import EventType
 import WorkDiffTime hiding (regular, work)
@@ -219,51 +219,21 @@ logStr = hPutStrLn stderr <=< addTime
       <$> getCurrentTime
       <*> getCurrentTimeZone
 
-data ChanInput a = Value a | End
-
 -- FIXME I hate how I have to pass Key separately because it's required by PullEvent;
 -- on the other hand, Pull as is doesn't know its events…
 -- TODO use Reader?
 downloadAllPREvents :: Config -> Manager -> [(Pull, SQL.Key Pull)] -> IO [MPull]
 downloadAllPREvents config manager pulls = do
-  keyedPullChan <- newChan
-  resultsChan <- newChan :: IO (Chan MPull)
-  endCounter <- newQSemN 0
   logLock <- newMVar ()
 
-  let numWorkers = 4
-      workersIdx = [0 .. numWorkers-1]
+  let
+    worker :: (Pull, SQL.Key Pull) -> IO MPull
+    worker keyedPull@(pull@(Pull { pullEventsUrl }), _) = do
+      withMVar logLock . const . logStr $ show pullEventsUrl
+      events <- downloadPREvents config manager keyedPull
+      pure $ MPull pull events
 
-      worker idx = do
-        input <- readChan keyedPullChan
-        case input of
-          Value keyedPull@(pull@(Pull { pullEventsUrl }), _) -> do
-            withMVar logLock . const . logStr $ mconcat ["#", show idx, ": ", show pullEventsUrl]
-            events <- downloadPREvents config manager keyedPull
-            writeChan resultsChan $ MPull pull events
-            worker idx
-
-          End -> signalQSemN endCounter 1
-
-  forM_ workersIdx $ forkIO . worker
-  forM_ (Value <$> pulls) $ writeChan keyedPullChan
-
-  forM_ workersIdx . const $ writeChan keyedPullChan End
-  waitQSemN endCounter numWorkers
-
-  getAvailableChanContents resultsChan
-
--- | Gets all available `Chan` contents until it's empty.
-getAvailableChanContents :: forall a. Chan a -> IO [a]
-getAvailableChanContents chan = reverse <$> iter []
-  where
-    iter :: [a] -> IO [a]
-    iter res = do
-      -- this seems like a hack, but it works
-      x <- (Just <$> readChan chan) `catch` (\(_ :: BlockedIndefinitelyOnMVar) -> pure Nothing)
-      case x of
-        Just x' -> iter (x' : res)
-        Nothing -> pure res
+  forConcurrentlyN (MaxResources 4) pulls worker
 
 downloadPREvents :: Config -> Manager -> (Pull, SQL.Key Pull) -> IO [PullEvent]
 downloadPREvents config manager (Pull { pullEventsUrl }, key) = do
