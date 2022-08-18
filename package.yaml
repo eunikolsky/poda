@@ -66,4 +66,5 @@ tests:
     - poda
     - hspec
     - persistent-sqlite
+    - text
     - time

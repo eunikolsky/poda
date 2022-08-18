@@ -16,9 +16,9 @@ import Data.Aeson hiding ((.=))
 import Data.Aeson.Types hiding ((.=))
 import Data.ByteString (ByteString)
 import Data.Csv ((.=), DefaultOrdered, ToField, ToNamedRecord, header, headerOrder, namedRecord, toField, toNamedRecord)
+import Data.Function (on)
 import Data.List
 import Data.Maybe
-import Data.Ord (comparing)
 import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Data.Time
@@ -86,13 +86,6 @@ data PullAnalysis = PullAnalysis
   }
   deriving Show
 
-instance Eq PullAnalysis where
-  PullAnalysis { pullAnalysisPull = pull0 } == PullAnalysis { pullAnalysisPull = pull1 } =
-    pull0 == pull1
-
-instance Ord PullAnalysis where
-  compare = comparing pullAnalysisPull
-
 -- | A model @Pull@ with its events.
 -- (It doesn't seem possible to get a @Pull@ with all its events from @persist@)
 data MPull = MPull
@@ -118,7 +111,8 @@ instance ToField NominalDiffTime where
 
 instance ToNamedRecord PullAnalysis where
   toNamedRecord PullAnalysis { pullAnalysisPull = p, pullAnalysisOpenTime, pullAnalysisDraftDuration } = namedRecord
-    [ "number" .= pullNumber p
+    [ "repo" .= pullRepo p
+    , "number" .= pullNumber p
     , "title" .= pullTitle p
     , "url" .= pullUrl p
     , "author" .= pullAuthor p
@@ -132,7 +126,7 @@ instance ToNamedRecord PullAnalysis where
 
 instance DefaultOrdered PullAnalysis where
   headerOrder _ = header
-    [ "number", "title", "url", "author", "created", "merged"
+    [ "repo", "number", "title", "url", "author", "created", "merged"
     , "open_time", "work_open_time"
     , "draft_time", "work_draft_time"
     ]
@@ -143,10 +137,8 @@ data Config = Config
     -- ^ GitHub token
   , configLocalTeam :: [Text]
     -- ^ Github names of our team
-  , configRepo :: Repo
-    -- ^ Repository to analyze
-  , configLabel :: Text
-    -- ^ Only PRs with this label are analyzed
+  , configRepos :: [Repo]
+    -- ^ Repositories to analyze
   , configFirstSprintStart :: Day
     -- ^ Start day of the first sprint
   }
@@ -173,10 +165,10 @@ listPRs config = do
 
   logLock <- newMVar ()
 
-  labeledPRs <- listLabeledPRs logLock manager
-  authorsPRs <- forConcurrentlyN maxConcurrentDownloads (configLocalTeam config) $ \author ->
-    listAuthorPRs logLock author manager
-  let prs = sortByNumberDesc . nub $ labeledPRs ++ concat authorsPRs
+  let authorRepos = [(author, repo) | author <- configLocalTeam config, repo <- configRepos config]
+  authorsPRs <- forConcurrentlyN maxConcurrentDownloads authorRepos $ \(author, repo) ->
+    listAuthorPRs logLock author repo manager
+  let prs = sortByRepoAndNumberDesc . nub $ concat authorsPRs
 
   prKeys <- runSqlite dbPath $ do
     -- delete all existing PRs first so that the uniqueness constraint doesn't block the insert;
@@ -193,16 +185,13 @@ listPRs config = do
   pure mPulls
 
   where
-    listLabeledPRs :: MVar () -> Manager -> IO [Pull]
-    listLabeledPRs logLock = listPRs' logLock $ "labels=" <> configLabel config
-
-    listAuthorPRs :: MVar () -> Text -> Manager -> IO [Pull]
+    listAuthorPRs :: MVar () -> Text -> Repo -> Manager -> IO [Pull]
     listAuthorPRs logLock author = listPRs' logLock $ "creator=" <> author
 
-    listPRs' :: MVar () -> Text -> Manager -> IO [Pull]
-    listPRs' logLock parameter manager = do
+    listPRs' :: MVar () -> Text -> Repo -> Manager -> IO [Pull]
+    listPRs' logLock parameter repo manager = do
       let { link = GithubPath . mconcat $
-        [ "https://api.github.com/repos/", unRepo . configRepo $ config
+        [ "https://api.github.com/repos/", unRepo repo
         , "/issues?per_page=100&state=all&", parameter
         ]
       }
@@ -216,7 +205,8 @@ listPRs config = do
           , GithubPath <$> httpRNextLink response
           )
 
-    sortByNumberDesc = sortOn (Data.Ord.Down . pullNumber)
+sortByRepoAndNumberDesc :: [Pull] -> [Pull]
+sortByRepoAndNumberDesc = sortOn (\Pull{..} -> (pullRepo, Data.Ord.Down pullNumber))
 
 logStr :: MVar () -> String -> IO ()
 logStr logLock = withMVar logLock . const . hPutStrLn stderr <=< addTime
@@ -422,6 +412,6 @@ sprintFilename (Sprint d) = mconcat [show d, "-", show $ addDays 13 d]
 groupBySprint :: Sprint -> [PullAnalysis] -> [(Sprint, [PullAnalysis])]
 groupBySprint firstSprint prs = (\s -> (s, filter (inSprint s . prDay) prs)) <$> allSprints
   where
-    maxPRCreated = prDay . maximum $ prs
-    allSprints = takeWhile (\(Sprint d) -> d < maxPRCreated) $ iterate nextSprint firstSprint
+    newestPR = prDay . maximumBy (compare `on` pullCreated . pullAnalysisPull) $ prs
+    allSprints = takeWhile (\(Sprint d) -> d < newestPR) $ iterate nextSprint firstSprint
     prDay = utctDay . pullCreated . pullAnalysisPull
