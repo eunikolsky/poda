@@ -17,12 +17,13 @@ module Database where
 
 import Control.Monad
 import Data.Aeson
+import Data.Function (on)
 import Data.Time
 import Data.ByteString (ByteString)
-import Data.Ord (comparing)
 import Data.Text (Text)
 import Database.Persist.Sqlite
 import Database.Persist.TH
+import qualified Data.Text as T
 
 import EventType
 
@@ -38,6 +39,7 @@ share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
     deriving Show
 
   Pull
+    repo Text
     number Int
     title Text
     url Text
@@ -58,13 +60,10 @@ share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
     deriving Show
 |]
 
--- | @Pull@ equality is based on their numbers only. Other fields are assumed to be
+-- | @Pull@ equality is based on `repo + number` only. Other fields are assumed to be
 -- the same no matter which API call they came from.
 instance Eq Pull where
-  Pull { pullNumber = number0 } == Pull { pullNumber = number1 } = number0 == number1
-
-instance Ord Pull where
-  compare = comparing pullNumber
+  (==) = (==) `on` (\Pull{..} -> (pullRepo, pullNumber))
 
 instance FromJSON Pull where
   parseJSON = withObject "PR" $ \v -> do
@@ -76,7 +75,21 @@ instance FromJSON Pull where
     pullCreated <- v .: "created_at"
     pullMerged <- v .: "pull_request" >>= (.: "merged_at")
     pullEventsUrl <- v .: "events_url"
+
+    pullRepo <- maybe
+      (fail $ "Couldn't get repo from URL " <> T.unpack pullUrl)
+      pure
+      $ extractRepoFromURL pullUrl
+
     pure $ Pull {..}
+
+-- TODO Maybe it's not the best way to get the repo text, but there is no direct way to inject
+-- it into `parseJSON`. The caller has this information, so it could pass it here somehow.
+extractRepoFromURL :: Text -> Maybe Text
+extractRepoFromURL url = do
+  repoWithStuff <- T.stripPrefix "https://github.com/" url
+  let (owner : repo : _) = T.splitOn "/" repoWithStuff
+  pure $ mconcat [owner, "/", repo]
 
 markReadyTime :: PullEvent -> Maybe UTCTime
 markReadyTime PullEvent { pullEventType = MarkReady, pullEventCreated } = Just pullEventCreated

@@ -1,7 +1,8 @@
 {
   "configFirstSprintStart": "2022-01-01",
-  "configLabel": "",
   "configLocalTeam": [],
-  "configRepo": "user/repo",
+  "configRepos": [
+    "user/repo"
+  ],
   "configToken": "<INSERT_TOKEN_HERE>"
 }

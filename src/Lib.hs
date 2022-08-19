@@ -10,16 +10,15 @@
 module Lib where
 
 import Control.Concurrent
-import Control.Exception (BlockedIndefinitelyOnMVar, catch)
 import Control.Monad
 import Control.Monad.IO.Class
 import Data.Aeson hiding ((.=))
 import Data.Aeson.Types hiding ((.=))
 import Data.ByteString (ByteString)
 import Data.Csv ((.=), DefaultOrdered, ToField, ToNamedRecord, header, headerOrder, namedRecord, toField, toNamedRecord)
+import Data.Function (on)
 import Data.List
 import Data.Maybe
-import Data.Ord (comparing)
 import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Data.Time
@@ -38,6 +37,7 @@ import qualified Data.Text as T
 import qualified Database.Persist.Sqlite as SQL
 
 import Analyze
+import Concurrency
 import Database
 import EventType
 import WorkDiffTime hiding (regular, work)
@@ -86,13 +86,6 @@ data PullAnalysis = PullAnalysis
   }
   deriving Show
 
-instance Eq PullAnalysis where
-  PullAnalysis { pullAnalysisPull = pull0 } == PullAnalysis { pullAnalysisPull = pull1 } =
-    pull0 == pull1
-
-instance Ord PullAnalysis where
-  compare = comparing pullAnalysisPull
-
 -- | A model @Pull@ with its events.
 -- (It doesn't seem possible to get a @Pull@ with all its events from @persist@)
 data MPull = MPull
@@ -118,7 +111,8 @@ instance ToField NominalDiffTime where
 
 instance ToNamedRecord PullAnalysis where
   toNamedRecord PullAnalysis { pullAnalysisPull = p, pullAnalysisOpenTime, pullAnalysisDraftDuration } = namedRecord
-    [ "number" .= pullNumber p
+    [ "repo" .= pullRepo p
+    , "number" .= pullNumber p
     , "title" .= pullTitle p
     , "url" .= pullUrl p
     , "author" .= pullAuthor p
@@ -132,7 +126,7 @@ instance ToNamedRecord PullAnalysis where
 
 instance DefaultOrdered PullAnalysis where
   headerOrder _ = header
-    [ "number", "title", "url", "author", "created", "merged"
+    [ "repo", "number", "title", "url", "author", "created", "merged"
     , "open_time", "work_open_time"
     , "draft_time", "work_draft_time"
     ]
@@ -143,10 +137,8 @@ data Config = Config
     -- ^ GitHub token
   , configLocalTeam :: [Text]
     -- ^ Github names of our team
-  , configRepo :: Repo
-    -- ^ Repository to analyze
-  , configLabel :: Text
-    -- ^ Only PRs with this label are analyzed
+  , configRepos :: [Repo]
+    -- ^ Repositories to analyze
   , configFirstSprintStart :: Day
     -- ^ Start day of the first sprint
   }
@@ -161,6 +153,9 @@ newtype Repo = Repo { unRepo :: Text }
 instance FromJSON Repo where
   parseJSON = fmap Repo . parseJSON
 
+maxConcurrentDownloads :: MaxResources
+maxConcurrentDownloads = MaxResources 4
+
 -- | List PRs in a repository when:
 -- * they have the given @configLabel@;
 -- * or they are created by a member of the @configLocalTeam@.
@@ -168,9 +163,12 @@ listPRs :: Config -> IO [MPull]
 listPRs config = do
   manager <- newManager tlsManagerSettings
 
-  labeledPRs <- listLabeledPRs manager
-  authorsPRs <- traverse (`listAuthorPRs` manager) (configLocalTeam config)
-  let prs = sortByNumberDesc . nub $ labeledPRs ++ concat authorsPRs
+  logLock <- newMVar ()
+
+  let authorRepos = [(author, repo) | author <- configLocalTeam config, repo <- configRepos config]
+  authorsPRs <- forConcurrentlyN maxConcurrentDownloads authorRepos $ \(author, repo) ->
+    listAuthorPRs logLock author repo manager
+  let prs = sortByRepoAndNumberDesc . nub $ concat authorsPRs
 
   prKeys <- runSqlite dbPath $ do
     -- delete all existing PRs first so that the uniqueness constraint doesn't block the insert;
@@ -187,22 +185,19 @@ listPRs config = do
   pure mPulls
 
   where
-    listLabeledPRs :: Manager -> IO [Pull]
-    listLabeledPRs = listPRs' $ "labels=" <> configLabel config
+    listAuthorPRs :: MVar () -> Text -> Repo -> Manager -> IO [Pull]
+    listAuthorPRs logLock author = listPRs' logLock $ "creator=" <> author
 
-    listAuthorPRs :: Text -> Manager -> IO [Pull]
-    listAuthorPRs author = listPRs' $ "creator=" <> author
-
-    listPRs' :: Text -> Manager -> IO [Pull]
-    listPRs' parameter manager = do
+    listPRs' :: MVar () -> Text -> Repo -> Manager -> IO [Pull]
+    listPRs' logLock parameter repo manager = do
       let { link = GithubPath . mconcat $
-        [ "https://api.github.com/repos/", unRepo . configRepo $ config
+        [ "https://api.github.com/repos/", unRepo repo
         , "/issues?per_page=100&state=all&", parameter
         ]
       }
       flip unfoldrM link $ \nextLink -> do
         request <- githubRequest config nextLink
-        logStr $ show nextLink
+        logStr logLock $ show nextLink
         response <- cachedHTTPLbs request manager
 
         pure
@@ -210,60 +205,32 @@ listPRs config = do
           , GithubPath <$> httpRNextLink response
           )
 
-    sortByNumberDesc = sortOn (Data.Ord.Down . pullNumber)
+sortByRepoAndNumberDesc :: [Pull] -> [Pull]
+sortByRepoAndNumberDesc = sortOn (\Pull{..} -> (pullRepo, Data.Ord.Down pullNumber))
 
-logStr :: String -> IO ()
-logStr = hPutStrLn stderr <=< addTime
+logStr :: MVar () -> String -> IO ()
+logStr logLock = withMVar logLock . const . hPutStrLn stderr <=< addTime
   where
+    addTime :: String -> IO String
     addTime s = (\t tz -> mconcat [show . snd . utcToLocalTimeOfDay tz . timeToTimeOfDay . utctDayTime $ t, " ", s])
       <$> getCurrentTime
       <*> getCurrentTimeZone
-
-data ChanInput a = Value a | End
 
 -- FIXME I hate how I have to pass Key separately because it's required by PullEvent;
 -- on the other hand, Pull as is doesn't know its events…
 -- TODO use Reader?
 downloadAllPREvents :: Config -> Manager -> [(Pull, SQL.Key Pull)] -> IO [MPull]
 downloadAllPREvents config manager pulls = do
-  keyedPullChan <- newChan
-  resultsChan <- newChan :: IO (Chan MPull)
-  endCounter <- newQSemN 0
   logLock <- newMVar ()
 
-  let numWorkers = 4
-      workersIdx = [0 .. numWorkers-1]
+  let
+    worker :: (Pull, SQL.Key Pull) -> IO MPull
+    worker keyedPull@(pull@(Pull { pullEventsUrl }), _) = do
+      logStr logLock $ show pullEventsUrl
+      events <- downloadPREvents config manager keyedPull
+      pure $ MPull pull events
 
-      worker idx = do
-        input <- readChan keyedPullChan
-        case input of
-          Value keyedPull@(pull@(Pull { pullEventsUrl }), _) -> do
-            withMVar logLock . const . logStr $ mconcat ["#", show idx, ": ", show pullEventsUrl]
-            events <- downloadPREvents config manager keyedPull
-            writeChan resultsChan $ MPull pull events
-            worker idx
-
-          End -> signalQSemN endCounter 1
-
-  forM_ workersIdx $ forkIO . worker
-  forM_ (Value <$> pulls) $ writeChan keyedPullChan
-
-  forM_ workersIdx . const $ writeChan keyedPullChan End
-  waitQSemN endCounter numWorkers
-
-  getAvailableChanContents resultsChan
-
--- | Gets all available `Chan` contents until it's empty.
-getAvailableChanContents :: forall a. Chan a -> IO [a]
-getAvailableChanContents chan = reverse <$> iter []
-  where
-    iter :: [a] -> IO [a]
-    iter res = do
-      -- this seems like a hack, but it works
-      x <- (Just <$> readChan chan) `catch` (\(_ :: BlockedIndefinitelyOnMVar) -> pure Nothing)
-      case x of
-        Just x' -> iter (x' : res)
-        Nothing -> pure res
+  forConcurrentlyN maxConcurrentDownloads pulls worker
 
 downloadPREvents :: Config -> Manager -> (Pull, SQL.Key Pull) -> IO [PullEvent]
 downloadPREvents config manager (Pull { pullEventsUrl }, key) = do
@@ -445,6 +412,6 @@ sprintFilename (Sprint d) = mconcat [show d, "-", show $ addDays 13 d]
 groupBySprint :: Sprint -> [PullAnalysis] -> [(Sprint, [PullAnalysis])]
 groupBySprint firstSprint prs = (\s -> (s, filter (inSprint s . prDay) prs)) <$> allSprints
   where
-    maxPRCreated = prDay . maximum $ prs
-    allSprints = takeWhile (\(Sprint d) -> d < maxPRCreated) $ iterate nextSprint firstSprint
+    newestPR = prDay . maximumBy (compare `on` pullCreated . pullAnalysisPull) $ prs
+    allSprints = takeWhile (\(Sprint d) -> d < newestPR) $ iterate nextSprint firstSprint
     prDay = utctDay . pullCreated . pullAnalysisPull
