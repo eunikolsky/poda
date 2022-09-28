@@ -16,12 +16,26 @@ utcTime = fromJust . iso8601ParseM
 
 mkPull :: Text -> Int -> Pull
 mkPull repo number = Pull
-    repo
-    number
-    ""
-    ""
-    ""
-    False
-    (UTCTime (fromOrdinalDate 2000 1) (secondsToDiffTime 0))
-    Nothing
-    ""
+  { pullRepo = repo
+  , pullNumber = number
+  , pullTitle = ""
+  , pullUrl = ""
+  , pullAuthor = ""
+  , pullIsDraft = False
+  , pullCreated = UTCTime (fromOrdinalDate 2000 1) (secondsToDiffTime 0)
+  , pullMerged = Nothing
+  , pullEventsUrl = ""
+  }
+
+mkPullCreated :: UTCTime -> Pull
+mkPullCreated created = Pull
+  { pullRepo = "repo"
+  , pullNumber = 1
+  , pullTitle = ""
+  , pullUrl = ""
+  , pullAuthor = ""
+  , pullIsDraft = False
+  , pullCreated = created
+  , pullMerged = Nothing
+  , pullEventsUrl = ""
+  }

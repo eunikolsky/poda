@@ -27,3 +27,10 @@ mkEventType "approved" = Just Approved
 mkEventType "dismissed" = Just DismissedApproval
 mkEventType "changes_requested" = Just RequestedChanges
 mkEventType _ = Nothing
+
+isReviewEventType :: EventType -> Bool
+isReviewEventType Commented = True
+isReviewEventType Approved = True
+isReviewEventType DismissedApproval = True
+isReviewEventType RequestedChanges = True
+isReviewEventType _ = False

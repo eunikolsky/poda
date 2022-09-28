@@ -1,3 +1,5 @@
+{-# LANGUAGE NamedFieldPuns, RecordWildCards #-}
+
 module Analyze
   ( DraftDurationInput(..)
   , MPull(..)
@@ -6,12 +8,14 @@ module Analyze
   ) where
 
 import Control.Applicative ((<|>))
+import Data.List
 import Data.Maybe
 import Data.Text (Text)
 import Data.Time
 import GHC.Stack (HasCallStack)
 
 import Database
+import EventType
 import WorkDiffTime hiding (regular, work)
 
 -- | Defines the necessary data to calculate the draft duration.
@@ -80,6 +84,7 @@ adjacentPairs xs = zip xs (tail xs)
 data MPull = MPull
   { mpPull :: Pull
   , mpEvents :: [PullEvent]
+  -- ^ Events associated with the `mpPull`, _must be in the older to newer order_.
   }
   deriving Show
 
@@ -90,4 +95,8 @@ instance DraftDurationInput MPull where
   ddiIsDraft = pullIsDraft . mpPull
 
 ourFirstReviewLatency :: [Text] -> MPull -> Maybe WorkDiffTime
-ourFirstReviewLatency _ _ = Nothing
+ourFirstReviewLatency _ MPull{mpPull=Pull{..},mpEvents} =
+  diffWorkTime <$> fmap pullEventCreated firstReview <*> pure pullCreated
+
+  where
+    firstReview = find (isReviewEventType . pullEventType) mpEvents
