@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
@@ -57,7 +58,7 @@ share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
     created UTCTime
     pull PullId OnDeleteCascade
     UniqueGhId ghId
-    deriving Show
+    deriving Eq Show
 |]
 
 -- | @Pull@ equality is based on `repo + number` only. Other fields are assumed to be

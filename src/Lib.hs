@@ -76,6 +76,35 @@ parsePullEvents pullId value = do
   eventJsons <- parseEither parseJSON value
   pure $ mapMaybe (pullEventFromJSON pullId) eventJsons
 
+-- | A "raw" version of @PullEvent@ (from the `timeline` github API) that can
+-- be directly decoded from JSON. See also `PullEventJSON`.
+data PullTimelineEventJSON = PullTimelineEventJSON
+  { ptejId :: !(Maybe Int)
+  , ptejType :: !Text
+  , ptejReviewState :: !(Maybe Text)
+  , ptejCreated :: !(Maybe UTCTime)
+  }
+
+instance FromJSON PullTimelineEventJSON where
+  parseJSON = withObject "PullEvent" $ \v -> PullTimelineEventJSON
+    <$> v .:? "id"
+    <*> v .: "event"
+    <*> v .:? "state"
+    <*> v .:? "submitted_at"
+
+pullEventFromTimelineJSON :: SQL.Key Pull -> PullTimelineEventJSON -> Maybe PullEvent
+pullEventFromTimelineJSON pullEventPull PullTimelineEventJSON{..} = do
+  guard $ ptejType == "reviewed"
+  pullEventType <- mkEventType =<< ptejReviewState
+  pullEventGhId <- ptejId
+  pullEventCreated <- ptejCreated
+  pure PullEvent{..}
+
+parsePullTimelineEvents :: SQL.Key Pull -> BL.ByteString -> Either String [PullEvent]
+parsePullTimelineEvents pullId bs = do
+  timelineEventJsons <- eitherDecode @[PullTimelineEventJSON] bs
+  pure $ mapMaybe (pullEventFromTimelineJSON pullId) timelineEventJsons
+
 data PullAnalysis = PullAnalysis
   { pullAnalysisPull :: Pull
   , pullAnalysisOpenTime :: Maybe WorkDiffTime

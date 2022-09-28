@@ -7,9 +7,13 @@ import Data.Time.Calendar.OrdinalDate
 import Test.Hspec
 
 import Database
+import Database.Persist.Sql (toSqlKey)
+import EventType
 import Lib
 import AnalyzeSpec
+import TestData
 import WorkDiffTimeSpec
+import SpecCommon
 
 main :: IO ()
 main = hspec $ do
@@ -50,6 +54,17 @@ main = hspec $ do
       let repos = [mkPull "c" 0, mkPull "a" 0, mkPull "b" 0, mkPull "a" 8, mkPull "c" 42]
       let expectedRepos = [mkPull "a" 8, mkPull "a" 0, mkPull "b" 0, mkPull "c" 42, mkPull "c" 0]
       sortByRepoAndNumberDesc repos `shouldBe` expectedRepos
+
+  describe "timeline events response" $ do
+    it "is parsed from JSON" $ do
+      let pullId = toSqlKey 1
+          timelineEvents =
+            [ PullEvent 42 DismissedApproval (utcTime "2022-09-06T16:57:34Z") pullId
+            , PullEvent 100 RequestedChanges (utcTime "2022-09-07T06:32:17Z") pullId
+            , PullEvent 200 Approved (utcTime "2022-09-09T07:37:58Z") pullId
+            , PullEvent 333 Commented (utcTime "2022-09-09T23:06:31Z") pullId
+            ]
+      parsePullTimelineEvents pullId timelineEventsString `shouldBe` Right timelineEvents
 
   WorkDiffTimeSpec.spec
   AnalyzeSpec.spec
