@@ -1,7 +1,6 @@
 {-# OPTIONS_GHC -Wno-orphans -Werror=missing-fields -Werror=missing-methods #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
@@ -120,20 +119,6 @@ data PullAnalysis = PullAnalysis
   -- ^ Total amount of time the PR was in draft.
   }
   deriving Show
-
--- | A model @Pull@ with its events.
--- (It doesn't seem possible to get a @Pull@ with all its events from @persist@)
-data MPull = MPull
-  { mpPull :: Pull
-  , mpEvents :: [PullEvent]
-  }
-  deriving Show
-
-instance DraftDurationInput MPull where
-  ddiCreated = pullCreated . mpPull
-  ddiMerged = pullMerged . mpPull
-  ddiEvents = mpEvents
-  ddiIsDraft = pullIsDraft . mpPull
 
 -- TODO remove orphan instances
 instance ToField UTCTime where

@@ -1,9 +1,4 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 import Data.Functor.Identity
-import Data.Text (Text)
-import Data.Time
-import Data.Time.Calendar.OrdinalDate
 import Test.Hspec
 
 import Database
@@ -68,15 +63,3 @@ main = hspec $ do
 
   WorkDiffTimeSpec.spec
   AnalyzeSpec.spec
-
-mkPull :: Text -> Int -> Pull
-mkPull repo number = Pull
-    repo
-    number
-    ""
-    ""
-    ""
-    False
-    (UTCTime (fromOrdinalDate 2000 1) (secondsToDiffTime 0))
-    Nothing
-    ""

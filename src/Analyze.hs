@@ -1,10 +1,13 @@
 module Analyze
   ( DraftDurationInput(..)
+  , MPull(..)
   , draftDuration
+  , ourFirstReviewLatency
   ) where
 
 import Control.Applicative ((<|>))
 import Data.Maybe
+import Data.Text (Text)
 import Data.Time
 import GHC.Stack (HasCallStack)
 
@@ -71,3 +74,20 @@ data StateTransition = StateTransition
 adjacentPairs :: [a] -> [(a, a)]
 adjacentPairs [] = []
 adjacentPairs xs = zip xs (tail xs)
+
+-- | A model @Pull@ with its events.
+-- (It doesn't seem possible to get a @Pull@ with all its events from @persist@)
+data MPull = MPull
+  { mpPull :: Pull
+  , mpEvents :: [PullEvent]
+  }
+  deriving Show
+
+instance DraftDurationInput MPull where
+  ddiCreated = pullCreated . mpPull
+  ddiMerged = pullMerged . mpPull
+  ddiEvents = mpEvents
+  ddiIsDraft = pullIsDraft . mpPull
+
+ourFirstReviewLatency :: [Text] -> MPull -> Maybe WorkDiffTime
+ourFirstReviewLatency _ _ = Nothing

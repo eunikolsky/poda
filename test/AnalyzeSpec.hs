@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module AnalyzeSpec where
 
 import Data.Time
@@ -13,7 +11,7 @@ import SpecCommon
 import qualified WorkDiffTime as WorkTime (regular)
 
 spec :: Spec
-spec =
+spec = describe "analyzers" $ do
   describe "draftDuration" $ do
     context "when PR is merged" $ do
       it "returns no duration when there are no events" $ do
@@ -82,6 +80,11 @@ spec =
             events = zipWith ($) (cycle [markReadyEvent, markDraftEvent]) times
             pull = defaultUnmergedDDI { fEvents = events }
         draftDuration' pull `shouldBe` Just ((1 + 0.5) * nominalDay)
+
+  describe "ourFirstReviewLatency" $ do
+    it "returns Nothing when there are no reviews" $ do
+      let pull = MPull { mpPull = mkPull "repo" 1, mpEvents = [] }
+      ourFirstReviewLatency [] pull `shouldBe` Nothing
 
 draftDuration' :: (HasCallStack, DraftDurationInput a) => a -> Maybe NominalDiffTime
 draftDuration' = fmap WorkTime.regular . draftDuration
