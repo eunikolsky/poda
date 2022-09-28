@@ -59,10 +59,10 @@ main = hspec $ do
     it "is parsed from JSON" $ do
       let pullId = toSqlKey 1
           timelineEvents =
-            [ PullEvent 42 DismissedApproval (utcTime "2022-09-06T16:57:34Z") pullId
-            , PullEvent 100 RequestedChanges (utcTime "2022-09-07T06:32:17Z") pullId
-            , PullEvent 200 Approved (utcTime "2022-09-09T07:37:58Z") pullId
-            , PullEvent 333 Commented (utcTime "2022-09-09T23:06:31Z") pullId
+            [ PullEvent 42 DismissedApproval "user" (utcTime "2022-09-06T16:57:34Z") pullId
+            , PullEvent 100 RequestedChanges "user1" (utcTime "2022-09-07T06:32:17Z") pullId
+            , PullEvent 200 Approved "user2" (utcTime "2022-09-09T07:37:58Z") pullId
+            , PullEvent 333 Commented "user1" (utcTime "2022-09-09T23:06:31Z") pullId
             ]
       parsePullTimelineEvents pullId timelineEventsString `shouldBe` Right timelineEvents
 

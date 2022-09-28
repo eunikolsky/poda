@@ -51,6 +51,7 @@ import qualified WorkDiffTime as WorkTime (regular, work)
 data PullEventJSON = PullEventJSON
   { pejId :: Int
   , pejType :: Text
+  , pejActor :: Text
   , pejCreated :: UTCTime
   }
   deriving (Show)
@@ -59,6 +60,7 @@ instance FromJSON PullEventJSON where
   parseJSON = withObject "PullEvent" $ \v -> PullEventJSON
     <$> v .: "id"
     <*> v .: "event"
+    <*> (v .: "actor" >>= (.: "login"))
     <*> v .: "created_at"
 
 pullEventFromJSON :: SQL.Key Pull -> PullEventJSON -> Maybe PullEvent
@@ -67,6 +69,7 @@ pullEventFromJSON pullId PullEventJSON {..} = do
   pure $ PullEvent
     { pullEventGhId = pejId
     , pullEventType = pullEventType
+    , pullEventActor = pejActor
     , pullEventCreated = pejCreated
     , pullEventPull = pullId
     }
@@ -82,6 +85,7 @@ data PullTimelineEventJSON = PullTimelineEventJSON
   { ptejId :: !(Maybe Int)
   , ptejType :: !Text
   , ptejReviewState :: !(Maybe Text)
+  , ptejActor :: !(Maybe Text)
   , ptejCreated :: !(Maybe UTCTime)
   }
 
@@ -90,6 +94,7 @@ instance FromJSON PullTimelineEventJSON where
     <$> v .:? "id"
     <*> v .: "event"
     <*> v .:? "state"
+    <*> (v .:? "user" >>= maybe (pure Nothing) (.: "login"))
     <*> v .:? "submitted_at"
 
 pullEventFromTimelineJSON :: SQL.Key Pull -> PullTimelineEventJSON -> Maybe PullEvent
@@ -97,6 +102,7 @@ pullEventFromTimelineJSON pullEventPull PullTimelineEventJSON{..} = do
   guard $ ptejType == "reviewed"
   pullEventType <- mkEventType =<< ptejReviewState
   pullEventGhId <- ptejId
+  pullEventActor <- ptejActor
   pullEventCreated <- ptejCreated
   pure PullEvent{..}
 

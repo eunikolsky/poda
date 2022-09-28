@@ -98,7 +98,7 @@ timelineEventsString = BL.pack [r|
     "id": 200,
     "node_id": "node",
     "user": {
-      "login": "uer2",
+      "login": "user2",
       "id": 21
     },
     "body": "",

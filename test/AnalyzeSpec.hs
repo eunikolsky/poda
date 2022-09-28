@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module AnalyzeSpec where
 
 import Data.Time
@@ -96,6 +98,7 @@ markDraftEvent :: UTCTime -> PullEvent
 markDraftEvent time = PullEvent
   { pullEventGhId = 0
   , pullEventType = MarkDraft
+  , pullEventActor = "user"
   , pullEventCreated = time
   , pullEventPull = toSqlKey 0
   }
@@ -104,6 +107,7 @@ markReadyEvent :: UTCTime -> PullEvent
 markReadyEvent time = PullEvent
   { pullEventGhId = 0
   , pullEventType = MarkReady
+  , pullEventActor = "user"
   , pullEventCreated = time
   , pullEventPull = toSqlKey 0
   }

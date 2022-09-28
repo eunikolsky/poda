@@ -55,6 +55,7 @@ share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
   PullEvent
     ghId Int
     type EventType
+    actor Text
     created UTCTime
     pull PullId OnDeleteCascade
     UniqueGhId ghId
