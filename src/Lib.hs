@@ -256,32 +256,31 @@ downloadAllPREvents config manager pulls = do
 
   let
     worker :: (Pull, SQL.Key Pull) -> IO MPull
-    worker keyedPull@(pull@(Pull { pullEventsUrl, pullTimelineUrl }), _) = do
-      logStr logLock $ show (pullEventsUrl, pullTimelineUrl)
-      events <- downloadPREvents config manager keyedPull
+    worker keyedPull@(pull, _) = do
+      events <- downloadPREvents logLock config manager keyedPull
       pure $ MPull pull events
 
   forConcurrentlyN maxConcurrentDownloads pulls worker
 
-downloadPREvents :: Config -> Manager -> (Pull, SQL.Key Pull) -> IO [PullEvent]
-downloadPREvents config manager (Pull { pullEventsUrl, pullTimelineUrl }, key) = do
+downloadPREvents :: MVar () -> Config -> Manager -> (Pull, SQL.Key Pull) -> IO [PullEvent]
+downloadPREvents logLock config manager (Pull { pullEventsUrl, pullTimelineUrl }, key) = do
   events <- download pullEventsUrl parsePullEvents "events"
   timelineEvents <- download pullTimelineUrl parsePullTimelineEvents "timeline events"
   pure $ mergePREvents events timelineEvents
 
   where
-    download url parse eventsType = do
+    download url parse eventsType =
       let link = GithubPath . mconcat $ [url, "?per_page=100"]
-      request <- githubRequest config link
-      response <- cachedHTTPLbs request manager
+      in flip unfoldrM link $ \nextLink -> do
+        request <- githubRequest config nextLink
+        logStr logLock $ show nextLink
+        response <- cachedHTTPLbs request manager
 
-      when (isJust $ httpRNextLink response) .
-        error $ "downloadPREvents: TODO: implement pagination " <> show (httpRNextLink response)
+        events <- case parse key (httpRData response) of
+          Right event -> pure event
+          Left err -> error . mconcat $ ["downloadPREvents: parsing ", eventsType, " from ", show nextLink, " failed: ", show err]
 
-      let events = parse key (httpRData response)
-      case events of
-        Right event -> pure event
-        Left err -> error . mconcat $ ["downloadPREvents: parsing ", eventsType, " from ", show link, " failed: ", show err]
+        pure (events, GithubPath <$> httpRNextLink response)
 
 -- | Merges two lists of `PullEvent`s and the output is ordered by increasing creation time.
 mergePREvents :: [PullEvent] -> [PullEvent] -> [PullEvent]
