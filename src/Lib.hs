@@ -266,6 +266,10 @@ downloadPREvents config manager (Pull { pullEventsUrl }, key) = do
     Right event -> pure event
     Left err -> error . mconcat $ ["downloadPREvents: parsing events from ", show link, " failed: ", show err]
 
+-- | Merges two lists of `PullEvent`s and the output is ordered by increasing creation time.
+mergePREvents :: [PullEvent] -> [PullEvent] -> [PullEvent]
+mergePREvents events0 = sortBy (compare `on` pullEventCreated) . (++) events0
+
 analyze :: MPull -> PullAnalysis
 analyze mPull@MPull { mpPull = pull@(Pull { pullCreated, pullMerged }) } = PullAnalysis
   { pullAnalysisPull = pull

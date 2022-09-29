@@ -1,6 +1,7 @@
 import Data.Functor.Identity
 import Test.Hspec
 
+import Analyze (adjacentPairs)
 import Database
 import Database.Persist.Sql (toSqlKey)
 import EventType
@@ -60,6 +61,23 @@ main = hspec $ do
             , PullEvent 333 Commented "user1" (utcTime "2022-09-09T23:06:31Z") pullId
             ]
       parsePullTimelineEvents pullId timelineEventsString `shouldBe` Right timelineEvents
+
+  describe "mergePREvents" $ do
+    it "orders merged events by increasing creation time" $ do
+      let pullId = toSqlKey 1
+          events0 =
+            [ PullEvent 0 MarkDraft "" (utcTime "2022-01-01T02:00:00Z") pullId
+            , PullEvent 2 DismissedApproval "" (utcTime "2022-01-02T10:00:00Z") pullId
+            , PullEvent 4 Approved "" (utcTime "2022-01-12T19:30:00Z") pullId
+            ]
+          events1 =
+            [ PullEvent 1 Commented "" (utcTime "2022-01-01T12:00:00Z") pullId
+            , PullEvent 3 MarkReady "" (utcTime "2022-01-12T00:00:00Z") pullId
+            ]
+          isOrderedByCreationTime = all (\(e0, e1) -> pullEventCreated e0 <= pullEventCreated e1)
+            . adjacentPairs
+
+      mergePREvents events0 events1 `shouldSatisfy` isOrderedByCreationTime
 
   WorkDiffTimeSpec.spec
   AnalyzeSpec.spec

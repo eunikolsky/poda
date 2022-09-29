@@ -3,6 +3,7 @@
 module Analyze
   ( DraftDurationInput(..)
   , MPull(..)
+  , adjacentPairs
   , draftDuration
   , ourFirstReviewLatency
   , theirFirstReviewLatency
