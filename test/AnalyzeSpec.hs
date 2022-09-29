@@ -99,6 +99,19 @@ spec = describe "analyzers" $ do
     it "calculates time diff from PR created to first requested changes review" $ do
       assertTimeDiffFromCreatedToFirstReview RequestedChanges
 
+    it "ignores reviews from the author" $ do
+      let created = utcTime "2022-01-01T00:00:00Z"
+          firstReview = utcTime "2022-01-04T12:00:00Z"
+          author = "user"
+          pullId = toSqlKey 1
+          events =
+            [ PullEvent 01 MarkReady author created pullId
+            , PullEvent 11 Commented author (utcTime "2022-01-01T10:00:00Z") pullId
+            , PullEvent 12 Approved "another" firstReview pullId
+            ]
+          pull = MPull { mpPull = mkPullCreated author created, mpEvents = events }
+      ourFirstReviewLatency [] pull `shouldBe` Just (diffWorkTime firstReview created)
+
 assertTimeDiffFromCreatedToFirstReview :: EventType -> Expectation
 assertTimeDiffFromCreatedToFirstReview eventType = do
   let created = utcTime "2022-01-01T00:00:00Z"
@@ -109,7 +122,7 @@ assertTimeDiffFromCreatedToFirstReview eventType = do
         , PullEvent 11 eventType "" firstReview pullId
         , PullEvent 12 eventType "" (utcTime "2022-01-06T00:00:00Z") pullId
         ]
-      pull = MPull { mpPull = mkPullCreated created, mpEvents = events }
+      pull = MPull { mpPull = mkPullCreated "user" created, mpEvents = events }
   ourFirstReviewLatency [] pull `shouldBe` Just (diffWorkTime firstReview created)
 
 draftDuration' :: (HasCallStack, DraftDurationInput a) => a -> Maybe NominalDiffTime

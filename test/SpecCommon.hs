@@ -27,13 +27,13 @@ mkPull repo number = Pull
   , pullEventsUrl = ""
   }
 
-mkPullCreated :: UTCTime -> Pull
-mkPullCreated created = Pull
+mkPullCreated :: Text -> UTCTime -> Pull
+mkPullCreated author created = Pull
   { pullRepo = "repo"
   , pullNumber = 1
   , pullTitle = ""
   , pullUrl = ""
-  , pullAuthor = ""
+  , pullAuthor = author
   , pullIsDraft = False
   , pullCreated = created
   , pullMerged = Nothing

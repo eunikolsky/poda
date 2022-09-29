@@ -99,4 +99,7 @@ ourFirstReviewLatency _ MPull{mpPull=Pull{..},mpEvents} =
   diffWorkTime <$> fmap pullEventCreated firstReview <*> pure pullCreated
 
   where
-    firstReview = find (isReviewEventType . pullEventType) mpEvents
+    firstReview = find (\e ->
+        (isReviewEventType . pullEventType) e
+        && pullAuthor /= pullEventActor e
+      ) mpEvents
