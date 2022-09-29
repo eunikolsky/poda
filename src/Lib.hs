@@ -1,7 +1,6 @@
 {-# OPTIONS_GHC -Wno-orphans -Werror=missing-fields -Werror=missing-methods #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
@@ -13,7 +12,6 @@ import Control.Concurrent
 import Control.Monad
 import Control.Monad.IO.Class
 import Data.Aeson hiding ((.=))
-import Data.Aeson.Types hiding ((.=))
 import Data.ByteString (ByteString)
 import Data.Csv ((.=), DefaultOrdered, ToField, ToNamedRecord, header, headerOrder, namedRecord, toField, toNamedRecord)
 import Data.Function (on)
@@ -33,6 +31,7 @@ import qualified Data.Bifunctor (second)
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Ord (Down(..))
+import qualified Data.Set as S
 import qualified Data.Text as T
 import qualified Database.Persist.Sqlite as SQL
 
@@ -51,6 +50,7 @@ import qualified WorkDiffTime as WorkTime (regular, work)
 data PullEventJSON = PullEventJSON
   { pejId :: Int
   , pejType :: Text
+  , pejActor :: Text
   , pejCreated :: UTCTime
   }
   deriving (Show)
@@ -59,6 +59,7 @@ instance FromJSON PullEventJSON where
   parseJSON = withObject "PullEvent" $ \v -> PullEventJSON
     <$> v .: "id"
     <*> v .: "event"
+    <*> (v .: "actor" >>= (.: "login"))
     <*> v .: "created_at"
 
 pullEventFromJSON :: SQL.Key Pull -> PullEventJSON -> Maybe PullEvent
@@ -67,15 +68,50 @@ pullEventFromJSON pullId PullEventJSON {..} = do
   pure $ PullEvent
     { pullEventGhId = pejId
     , pullEventType = pullEventType
+    , pullEventActor = pejActor
     , pullEventCreated = pejCreated
     , pullEventPull = pullId
     }
 
-parsePullEvents :: SQL.Key Pull -> Value -> Either String [PullEvent]
-parsePullEvents pullId value = do
-  eventJsons <- parseEither parseJSON value
+parsePullEvents :: SQL.Key Pull -> BL.ByteString -> Either String [PullEvent]
+parsePullEvents pullId bs = do
+  eventJsons <- eitherDecode @[PullEventJSON] bs
   pure $ mapMaybe (pullEventFromJSON pullId) eventJsons
 
+-- | A "raw" version of @PullEvent@ (from the `timeline` github API) that can
+-- be directly decoded from JSON. See also `PullEventJSON`.
+data PullTimelineEventJSON = PullTimelineEventJSON
+  { ptejId :: !(Maybe Int)
+  , ptejType :: !Text
+  , ptejReviewState :: !(Maybe Text)
+  , ptejActor :: !(Maybe Text)
+  , ptejCreated :: !(Maybe UTCTime)
+  }
+
+instance FromJSON PullTimelineEventJSON where
+  parseJSON = withObject "PullEvent" $ \v -> PullTimelineEventJSON
+    <$> v .:? "id"
+    <*> v .: "event"
+    <*> v .:? "state"
+    <*> (v .:? "user" >>= maybe (pure Nothing) (.: "login"))
+    <*> v .:? "submitted_at"
+
+pullEventFromTimelineJSON :: SQL.Key Pull -> PullTimelineEventJSON -> Maybe PullEvent
+pullEventFromTimelineJSON pullEventPull PullTimelineEventJSON{..} = do
+  guard $ ptejType == "reviewed"
+  pullEventType <- mkEventType =<< ptejReviewState
+  pullEventGhId <- ptejId
+  pullEventActor <- ptejActor
+  pullEventCreated <- ptejCreated
+  pure PullEvent{..}
+
+parsePullTimelineEvents :: SQL.Key Pull -> BL.ByteString -> Either String [PullEvent]
+parsePullTimelineEvents pullId bs = do
+  timelineEventJsons <- eitherDecode @[PullTimelineEventJSON] bs
+  pure $ mapMaybe (pullEventFromTimelineJSON pullId) timelineEventJsons
+
+-- Note: when adding new fields, don't forget to add them to the
+-- `ToNamedRecord` and `DefaultOrdered` instances for CSV export
 data PullAnalysis = PullAnalysis
   { pullAnalysisPull :: Pull
   , pullAnalysisOpenTime :: Maybe WorkDiffTime
@@ -83,22 +119,10 @@ data PullAnalysis = PullAnalysis
   -- regardless of any time it might have been closed in between.
   , pullAnalysisDraftDuration :: Maybe WorkDiffTime
   -- ^ Total amount of time the PR was in draft.
+  , pullAnalysisOurFirstReviewLatency :: Maybe WorkDiffTime
+  , pullAnalysisTheirFirstReviewLatency :: Maybe WorkDiffTime
   }
   deriving Show
-
--- | A model @Pull@ with its events.
--- (It doesn't seem possible to get a @Pull@ with all its events from @persist@)
-data MPull = MPull
-  { mpPull :: Pull
-  , mpEvents :: [PullEvent]
-  }
-  deriving Show
-
-instance DraftDurationInput MPull where
-  ddiCreated = pullCreated . mpPull
-  ddiMerged = pullMerged . mpPull
-  ddiEvents = mpEvents
-  ddiIsDraft = pullIsDraft . mpPull
 
 -- TODO remove orphan instances
 instance ToField UTCTime where
@@ -110,7 +134,7 @@ instance ToField NominalDiffTime where
   toField = C.pack . show @Int . truncate @Double . realToFrac
 
 instance ToNamedRecord PullAnalysis where
-  toNamedRecord PullAnalysis { pullAnalysisPull = p, pullAnalysisOpenTime, pullAnalysisDraftDuration } = namedRecord
+  toNamedRecord PullAnalysis { pullAnalysisPull = p, .. } = namedRecord
     [ "repo" .= pullRepo p
     , "number" .= pullNumber p
     , "title" .= pullTitle p
@@ -122,6 +146,10 @@ instance ToNamedRecord PullAnalysis where
     , "work_open_time" .= fmap WorkTime.work pullAnalysisOpenTime
     , "draft_time" .= fmap WorkTime.regular pullAnalysisDraftDuration
     , "work_draft_time" .= fmap WorkTime.work pullAnalysisDraftDuration
+    , "our_first_review_latency" .= fmap WorkTime.regular pullAnalysisOurFirstReviewLatency
+    , "work_our_first_review_latency" .= fmap WorkTime.work pullAnalysisOurFirstReviewLatency
+    , "their_first_review_latency" .= fmap WorkTime.regular pullAnalysisTheirFirstReviewLatency
+    , "work_their_first_review_latency" .= fmap WorkTime.work pullAnalysisTheirFirstReviewLatency
     ]
 
 instance DefaultOrdered PullAnalysis where
@@ -129,6 +157,8 @@ instance DefaultOrdered PullAnalysis where
     [ "repo", "number", "title", "url", "author", "created", "merged"
     , "open_time", "work_open_time"
     , "draft_time", "work_draft_time"
+    , "our_first_review_latency", "work_our_first_review_latency"
+    , "their_first_review_latency", "work_their_first_review_latency"
     ]
 
 -- | Configuration information for the program.
@@ -173,6 +203,7 @@ listPRs config = do
   prKeys <- runSqlite dbPath $ do
     -- delete all existing PRs first so that the uniqueness constraint doesn't block the insert;
     -- older PRs can't be lost because we always get the list of all PRs above
+    -- TODO remove Pull and PullEvent from the db since I'm not reading them anyway?
     deleteWhere ([] :: [Filter Pull])
     insertMany prs
 
@@ -225,33 +256,45 @@ downloadAllPREvents config manager pulls = do
 
   let
     worker :: (Pull, SQL.Key Pull) -> IO MPull
-    worker keyedPull@(pull@(Pull { pullEventsUrl }), _) = do
-      logStr logLock $ show pullEventsUrl
-      events <- downloadPREvents config manager keyedPull
+    worker keyedPull@(pull, _) = do
+      events <- downloadPREvents logLock config manager keyedPull
       pure $ MPull pull events
 
   forConcurrentlyN maxConcurrentDownloads pulls worker
 
-downloadPREvents :: Config -> Manager -> (Pull, SQL.Key Pull) -> IO [PullEvent]
-downloadPREvents config manager (Pull { pullEventsUrl }, key) = do
-  let link = GithubPath . mconcat $ [pullEventsUrl, "?per_page=100"]
-  request <- githubRequest config link
-  response <- cachedHTTPLbs request manager
+downloadPREvents :: MVar () -> Config -> Manager -> (Pull, SQL.Key Pull) -> IO [PullEvent]
+downloadPREvents logLock config manager (Pull { pullEventsUrl, pullTimelineUrl }, key) = do
+  events <- download pullEventsUrl parsePullEvents "events"
+  timelineEvents <- download pullTimelineUrl parsePullTimelineEvents "timeline events"
+  pure $ mergePREvents events timelineEvents
 
-  when (isJust $ httpRNextLink response) .
-    error $ "downloadPREvents: TODO: implement pagination " <> show (httpRNextLink response)
+  where
+    download url parse eventsType =
+      let link = GithubPath . mconcat $ [url, "?per_page=100"]
+      in flip unfoldrM link $ \nextLink -> do
+        request <- githubRequest config nextLink
+        logStr logLock $ show nextLink
+        response <- cachedHTTPLbs request manager
 
-  let events = eitherDecode (httpRData response) >>= parsePullEvents key
-  case events of
-    Right event -> pure event
-    Left err -> error . mconcat $ ["downloadPREvents: parsing events from ", show link, " failed: ", show err]
+        events <- case parse key (httpRData response) of
+          Right event -> pure event
+          Left err -> error . mconcat $ ["downloadPREvents: parsing ", eventsType, " from ", show nextLink, " failed: ", show err]
 
-analyze :: MPull -> PullAnalysis
-analyze mPull@MPull { mpPull = pull@(Pull { pullCreated, pullMerged }) } = PullAnalysis
+        pure (events, GithubPath <$> httpRNextLink response)
+
+-- | Merges two lists of `PullEvent`s and the output is ordered by increasing creation time.
+mergePREvents :: [PullEvent] -> [PullEvent] -> [PullEvent]
+mergePREvents events0 = sortBy (compare `on` pullEventCreated) . (++) events0
+
+analyze :: Config -> MPull -> PullAnalysis
+analyze Config{configLocalTeam} mPull@MPull { mpPull = pull@(Pull { pullCreated, pullMerged }) } = PullAnalysis
   { pullAnalysisPull = pull
   , pullAnalysisOpenTime = diffWorkTime <$> pullMerged <*> pure pullCreated
   , pullAnalysisDraftDuration = draftDuration mPull
+  , pullAnalysisOurFirstReviewLatency = ourFirstReviewLatency team mPull
+  , pullAnalysisTheirFirstReviewLatency = theirFirstReviewLatency team mPull
   }
+  where team = S.fromList configLocalTeam
 
 printPRs :: [Pull] -> IO ()
 printPRs prs = printAll >> printRemaining
@@ -374,6 +417,8 @@ data PRGroup = PRGroup
   , prgMergedPRCount :: Int
   , prgAverageResult :: Maybe AverageResult
   , prgAverageWorkDraftDuration :: Maybe NominalDiffTime
+  , prgAverageWorkOurFirstReviewLatency :: Maybe NominalDiffTime
+  , prgAverageWorkTheirFirstReviewLatency :: Maybe NominalDiffTime
   }
 
 averageWorkOpenTime :: [PullAnalysis] -> PRGroup
@@ -387,6 +432,8 @@ averageWorkOpenTime prs = PRGroup
   , prgAverageWorkDraftDuration =
       let draftDurations :: [NominalDiffTime] = mapMaybe (fmap WorkTime.work . pullAnalysisDraftDuration) prs
       in avg draftDurations
+  , prgAverageWorkOurFirstReviewLatency = avg $ mapMaybe (fmap WorkTime.work . pullAnalysisOurFirstReviewLatency) prs
+  , prgAverageWorkTheirFirstReviewLatency = avg $ mapMaybe (fmap WorkTime.work . pullAnalysisTheirFirstReviewLatency) prs
   }
 
 formatDiffTime :: NominalDiffTime -> String

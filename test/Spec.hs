@@ -1,15 +1,15 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 import Data.Functor.Identity
-import Data.Text (Text)
-import Data.Time
-import Data.Time.Calendar.OrdinalDate
 import Test.Hspec
 
+import Analyze (adjacentPairs)
 import Database
+import Database.Persist.Sql (toSqlKey)
+import EventType
 import Lib
 import AnalyzeSpec
+import TestData
 import WorkDiffTimeSpec
+import SpecCommon
 
 main :: IO ()
 main = hspec $ do
@@ -51,17 +51,33 @@ main = hspec $ do
       let expectedRepos = [mkPull "a" 8, mkPull "a" 0, mkPull "b" 0, mkPull "c" 42, mkPull "c" 0]
       sortByRepoAndNumberDesc repos `shouldBe` expectedRepos
 
+  describe "timeline events response" $ do
+    it "is parsed from JSON" $ do
+      let pullId = toSqlKey 1
+          timelineEvents =
+            [ PullEvent 42 DismissedApproval "user" (utcTime "2022-09-06T16:57:34Z") pullId
+            , PullEvent 100 RequestedChanges "user1" (utcTime "2022-09-07T06:32:17Z") pullId
+            , PullEvent 200 Approved "user2" (utcTime "2022-09-09T07:37:58Z") pullId
+            , PullEvent 333 Commented "user1" (utcTime "2022-09-09T23:06:31Z") pullId
+            ]
+      parsePullTimelineEvents pullId timelineEventsString `shouldBe` Right timelineEvents
+
+  describe "mergePREvents" $ do
+    it "orders merged events by increasing creation time" $ do
+      let pullId = toSqlKey 1
+          events0 =
+            [ PullEvent 0 MarkDraft "" (utcTime "2022-01-01T02:00:00Z") pullId
+            , PullEvent 2 DismissedApproval "" (utcTime "2022-01-02T10:00:00Z") pullId
+            , PullEvent 4 Approved "" (utcTime "2022-01-12T19:30:00Z") pullId
+            ]
+          events1 =
+            [ PullEvent 1 Commented "" (utcTime "2022-01-01T12:00:00Z") pullId
+            , PullEvent 3 MarkReady "" (utcTime "2022-01-12T00:00:00Z") pullId
+            ]
+          isOrderedByCreationTime = all (\(e0, e1) -> pullEventCreated e0 <= pullEventCreated e1)
+            . adjacentPairs
+
+      mergePREvents events0 events1 `shouldSatisfy` isOrderedByCreationTime
+
   WorkDiffTimeSpec.spec
   AnalyzeSpec.spec
-
-mkPull :: Text -> Int -> Pull
-mkPull repo number = Pull
-    repo
-    number
-    ""
-    ""
-    ""
-    False
-    (UTCTime (fromOrdinalDate 2000 1) (secondsToDiffTime 0))
-    Nothing
-    ""

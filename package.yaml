@@ -28,10 +28,14 @@ dependencies:
 ghc-options:
 - -Wall
 
+default-extensions:
+- OverloadedStrings
+
 library:
   source-dirs: src
   dependencies:
   - async
+  - containers
   - http-client
   - http-client-tls
   - http-types
@@ -64,7 +68,9 @@ tests:
     - -with-rtsopts=-N
     dependencies:
     - poda
+    - containers
     - hspec
     - persistent-sqlite
+    - raw-strings-qq
     - text
     - time

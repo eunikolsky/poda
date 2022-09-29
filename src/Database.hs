@@ -1,11 +1,11 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE StandaloneDeriving #-}
@@ -48,16 +48,18 @@ share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
     created UTCTime
     merged UTCTime Maybe
     eventsUrl Text
+    timelineUrl Text
     UniqueNumber number
     deriving Show
 
   PullEvent
     ghId Int
     type EventType
+    actor Text
     created UTCTime
     pull PullId OnDeleteCascade
     UniqueGhId ghId
-    deriving Show
+    deriving Eq Show
 |]
 
 -- | @Pull@ equality is based on `repo + number` only. Other fields are assumed to be
@@ -75,6 +77,7 @@ instance FromJSON Pull where
     pullCreated <- v .: "created_at"
     pullMerged <- v .: "pull_request" >>= (.: "merged_at")
     pullEventsUrl <- v .: "events_url"
+    pullTimelineUrl <- v .: "timeline_url"
 
     pullRepo <- maybe
       (fail $ "Couldn't get repo from URL " <> T.unpack pullUrl)

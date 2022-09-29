@@ -1,14 +1,25 @@
+{-# LANGUAGE NamedFieldPuns, RecordWildCards #-}
+
 module Analyze
   ( DraftDurationInput(..)
+  , MPull(..)
+  , adjacentPairs
   , draftDuration
+  , ourFirstReviewLatency
+  , theirFirstReviewLatency
   ) where
 
 import Control.Applicative ((<|>))
+import Data.List
 import Data.Maybe
+import Data.Set (Set)
+import Data.Text (Text)
 import Data.Time
 import GHC.Stack (HasCallStack)
+import qualified Data.Set as S
 
 import Database
+import EventType
 import WorkDiffTime hiding (regular, work)
 
 -- | Defines the necessary data to calculate the draft duration.
@@ -71,3 +82,41 @@ data StateTransition = StateTransition
 adjacentPairs :: [a] -> [(a, a)]
 adjacentPairs [] = []
 adjacentPairs xs = zip xs (tail xs)
+
+-- | A model @Pull@ with its events.
+-- (It doesn't seem possible to get a @Pull@ with all its events from @persist@)
+data MPull = MPull
+  { mpPull :: Pull
+  , mpEvents :: [PullEvent]
+  -- ^ Events associated with the `mpPull`, _must be in the older to newer order_.
+  }
+  deriving Show
+
+instance DraftDurationInput MPull where
+  ddiCreated = pullCreated . mpPull
+  ddiMerged = pullMerged . mpPull
+  ddiEvents = mpEvents
+  ddiIsDraft = pullIsDraft . mpPull
+
+-- | Calculates the length of time between a PR is created and a review from
+-- someone on the `team` is left (excluding the PR author).
+ourFirstReviewLatency :: Set Text -> MPull -> Maybe WorkDiffTime
+ourFirstReviewLatency team = firstReviewLatency (`S.member` team)
+
+-- | Calculates the length of time between a PR is created and a review from
+-- someone _not_ on the `team` is left (excluding the PR author).
+theirFirstReviewLatency :: Set Text -> MPull -> Maybe WorkDiffTime
+theirFirstReviewLatency team = firstReviewLatency (`S.notMember` team)
+
+type Predicate a = a -> Bool
+
+firstReviewLatency :: Predicate Text -> MPull -> Maybe WorkDiffTime
+firstReviewLatency shouldUseEventByActor MPull{mpPull=Pull{..},mpEvents} =
+  diffWorkTime <$> fmap pullEventCreated firstReview <*> pure pullCreated
+
+  where
+    firstReview = find (\PullEvent{..} ->
+        isReviewEventType pullEventType
+        && shouldUseEventByActor pullEventActor
+        && pullAuthor /= pullEventActor
+      ) mpEvents

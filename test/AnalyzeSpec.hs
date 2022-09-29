@@ -1,5 +1,6 @@
 module AnalyzeSpec where
 
+import qualified Data.Set as S
 import Data.Time
 import Database.Persist.Sqlite
 import Test.Hspec
@@ -8,10 +9,11 @@ import Analyze
 import Database
 import EventType
 import SpecCommon
+import WorkDiffTime (diffWorkTime)
 import qualified WorkDiffTime as WorkTime (regular)
 
 spec :: Spec
-spec =
+spec = describe "analyzers" $ do
   describe "draftDuration" $ do
     context "when PR is merged" $ do
       it "returns no duration when there are no events" $ do
@@ -81,6 +83,115 @@ spec =
             pull = defaultUnmergedDDI { fEvents = events }
         draftDuration' pull `shouldBe` Just ((1 + 0.5) * nominalDay)
 
+  describe "ourFirstReviewLatency" $ do
+    let assertTimeDiffFromCreatedToFirstReview :: EventType -> Expectation
+        assertTimeDiffFromCreatedToFirstReview eventType = do
+          let created = utcTime "2022-01-01T00:00:00Z"
+              firstReview = utcTime "2022-01-04T12:00:00Z"
+              pullId = toSqlKey 1
+              events =
+                [ PullEvent 01 MarkReady "" created pullId
+                , PullEvent 11 eventType "" firstReview pullId
+                , PullEvent 12 eventType "" (utcTime "2022-01-06T00:00:00Z") pullId
+                ]
+              pull = MPull { mpPull = mkPullCreated "user" created, mpEvents = events }
+          ourFirstReviewLatency (S.singleton "") pull `shouldBe` Just (diffWorkTime firstReview created)
+
+    it "returns Nothing when there are no reviews" $ do
+      let pull = MPull { mpPull = mkPull "repo" 1, mpEvents = [] }
+      ourFirstReviewLatency mempty pull `shouldBe` Nothing
+
+    it "calculates time diff from PR created to first approved review" $ do
+      assertTimeDiffFromCreatedToFirstReview Approved
+
+    it "calculates time diff from PR created to first approved, yet dismissed review" $ do
+      assertTimeDiffFromCreatedToFirstReview DismissedApproval
+
+    it "calculates time diff from PR created to first commented review" $ do
+      assertTimeDiffFromCreatedToFirstReview Commented
+
+    it "calculates time diff from PR created to first requested changes review" $ do
+      assertTimeDiffFromCreatedToFirstReview RequestedChanges
+
+    it "ignores reviews from the author" $ do
+      let created = utcTime "2022-01-01T00:00:00Z"
+          firstReview = utcTime "2022-01-04T12:00:00Z"
+          author = "user"
+          pullId = toSqlKey 1
+          events =
+            [ PullEvent 11 Commented author (utcTime "2022-01-01T10:00:00Z") pullId
+            , PullEvent 12 Approved "another" firstReview pullId
+            ]
+          pull = MPull { mpPull = mkPullCreated author created, mpEvents = events }
+      ourFirstReviewLatency (S.singleton "another") pull `shouldBe` Just (diffWorkTime firstReview created)
+
+    it "considers reviews from the team" $ do
+      let created = utcTime "2022-01-01T00:00:00Z"
+          firstReview = utcTime "2022-01-04T12:00:00Z"
+          user = "user"
+          pullId = toSqlKey 1
+          events =
+            [ PullEvent 11 Commented "anonymous" (utcTime "2022-01-01T10:00:00Z") pullId
+            , PullEvent 12 Approved user firstReview pullId
+            ]
+          pull = MPull { mpPull = mkPullCreated "author" created, mpEvents = events }
+      ourFirstReviewLatency (S.fromList [user, "author"]) pull `shouldBe` Just (diffWorkTime firstReview created)
+
+  describe "theirFirstReviewLatency" $ do
+    let assertTimeDiffFromCreatedToFirstReview :: EventType -> Expectation
+        assertTimeDiffFromCreatedToFirstReview eventType = do
+          let created = utcTime "2022-01-01T00:00:00Z"
+              firstReview = utcTime "2022-01-04T12:00:00Z"
+              pullId = toSqlKey 1
+              user = "user"
+              events =
+                [ PullEvent 01 MarkReady "author" created pullId
+                , PullEvent 11 eventType user (utcTime "2022-01-02T00:00:00Z") pullId
+                , PullEvent 12 eventType "" firstReview pullId
+                ]
+              pull = MPull { mpPull = mkPullCreated "author" created, mpEvents = events }
+          theirFirstReviewLatency (S.singleton user) pull `shouldBe` Just (diffWorkTime firstReview created)
+
+    it "returns Nothing when there are no reviews" $ do
+      let pull = MPull { mpPull = mkPull "repo" 1, mpEvents = [] }
+      theirFirstReviewLatency mempty pull `shouldBe` Nothing
+
+    it "calculates time diff from PR created to first approved review" $ do
+      assertTimeDiffFromCreatedToFirstReview Approved
+
+    it "calculates time diff from PR created to first approved, yet dismissed review" $ do
+      assertTimeDiffFromCreatedToFirstReview DismissedApproval
+
+    it "calculates time diff from PR created to first commented review" $ do
+      assertTimeDiffFromCreatedToFirstReview Commented
+
+    it "calculates time diff from PR created to first requested changes review" $ do
+      assertTimeDiffFromCreatedToFirstReview RequestedChanges
+
+    it "ignores reviews from the author" $ do
+      let created = utcTime "2022-01-01T00:00:00Z"
+          firstReview = utcTime "2022-01-04T12:00:00Z"
+          author = "user"
+          pullId = toSqlKey 1
+          events =
+            [ PullEvent 11 Commented author (utcTime "2022-01-01T10:00:00Z") pullId
+            , PullEvent 12 Approved "another" firstReview pullId
+            ]
+          pull = MPull { mpPull = mkPullCreated author created, mpEvents = events }
+      theirFirstReviewLatency (S.singleton "author") pull `shouldBe` Just (diffWorkTime firstReview created)
+
+    it "ignores reviews from the team" $ do
+      let created = utcTime "2022-01-01T00:00:00Z"
+          firstReview = utcTime "2022-01-04T12:00:00Z"
+          user = "user"
+          pullId = toSqlKey 1
+          events =
+            [ PullEvent 11 Commented user (utcTime "2022-01-01T10:00:00Z") pullId
+            , PullEvent 12 Approved "anonymous" firstReview pullId
+            ]
+          pull = MPull { mpPull = mkPullCreated "author" created, mpEvents = events }
+      theirFirstReviewLatency (S.fromList [user, "author"]) pull `shouldBe` Just (diffWorkTime firstReview created)
+
 draftDuration' :: (HasCallStack, DraftDurationInput a) => a -> Maybe NominalDiffTime
 draftDuration' = fmap WorkTime.regular . draftDuration
 
@@ -96,6 +207,7 @@ markDraftEvent :: UTCTime -> PullEvent
 markDraftEvent time = PullEvent
   { pullEventGhId = 0
   , pullEventType = MarkDraft
+  , pullEventActor = "user"
   , pullEventCreated = time
   , pullEventPull = toSqlKey 0
   }
@@ -104,6 +216,7 @@ markReadyEvent :: UTCTime -> PullEvent
 markReadyEvent time = PullEvent
   { pullEventGhId = 0
   , pullEventType = MarkReady
+  , pullEventActor = "user"
   , pullEventCreated = time
   , pullEventPull = toSqlKey 0
   }
