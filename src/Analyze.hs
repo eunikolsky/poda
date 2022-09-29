@@ -5,6 +5,7 @@ module Analyze
   , MPull(..)
   , draftDuration
   , ourFirstReviewLatency
+  , theirFirstReviewLatency
   ) where
 
 import Control.Applicative ((<|>))
@@ -96,6 +97,8 @@ instance DraftDurationInput MPull where
   ddiEvents = mpEvents
   ddiIsDraft = pullIsDraft . mpPull
 
+-- | Calculates the length of time between a PR is created and a review from
+-- someone on the `team` is left (excluding the PR author).
 ourFirstReviewLatency :: Set Text -> MPull -> Maybe WorkDiffTime
 ourFirstReviewLatency team MPull{mpPull=Pull{..},mpEvents} =
   diffWorkTime <$> fmap pullEventCreated firstReview <*> pure pullCreated
@@ -104,5 +107,18 @@ ourFirstReviewLatency team MPull{mpPull=Pull{..},mpEvents} =
     firstReview = find (\PullEvent{..} ->
         isReviewEventType pullEventType
         && S.member pullEventActor team
+        && pullAuthor /= pullEventActor
+      ) mpEvents
+
+-- | Calculates the length of time between a PR is created and a review from
+-- someone _not_ on the `team` is left (excluding the PR author).
+theirFirstReviewLatency :: Set Text -> MPull -> Maybe WorkDiffTime
+theirFirstReviewLatency team MPull{mpPull=Pull{..},mpEvents} =
+  diffWorkTime <$> fmap pullEventCreated firstReview <*> pure pullCreated
+
+  where
+    firstReview = find (\PullEvent{..} ->
+        isReviewEventType pullEventType
+        && S.notMember pullEventActor team
         && pullAuthor /= pullEventActor
       ) mpEvents
