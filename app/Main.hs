@@ -23,7 +23,7 @@ run :: IO ()
 run = do
   config <- loadConfig
   migrateDB
-  a <- fmap analyze <$> listPRs config
+  a <- fmap (analyze config) <$> listPRs config
 
   BL.writeFile "pulls.csv" $ encodeDefaultOrderedByName a
   let bySprint = groupBySprint (Sprint $ configFirstSprintStart config) a
@@ -39,7 +39,9 @@ printOpenTimes (period, prs) = let prGroup = averageWorkOpenTime prs in
     , ", ", show $ prgMergedPRCount prGroup, " merged PRs"
     , "; average open time: ", maybe "N/A" (formatDiffTime . arOpenDuration) $ prgAverageResult prGroup
     , " (ignoring weekends: ", maybe "N/A" (formatDiffTime . arOpenWorkDuration) $ prgAverageResult prGroup, ")"
-    , "; avg draft duration ignoring weekends: ", maybe "0" formatDiffTime $ prgAverageWorkDraftDuration prGroup
+    , "; avg draft duration (ignoring weekends): ", maybe "0" formatDiffTime $ prgAverageWorkDraftDuration prGroup
+    , "; avg latency of our first review (ignoring weekends): ", maybe "N/A" formatDiffTime $ prgAverageWorkOurFirstReviewLatency prGroup
+    , "; avg latency of their first review (ignoring weekends): ", maybe "N/A" formatDiffTime $ prgAverageWorkTheirFirstReviewLatency prGroup
     ]
 
 saveSprintFile :: (Sprint, [PullAnalysis]) -> IO ()

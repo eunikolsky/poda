@@ -48,6 +48,7 @@ share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
     created UTCTime
     merged UTCTime Maybe
     eventsUrl Text
+    timelineUrl Text
     UniqueNumber number
     deriving Show
 
@@ -76,6 +77,7 @@ instance FromJSON Pull where
     pullCreated <- v .: "created_at"
     pullMerged <- v .: "pull_request" >>= (.: "merged_at")
     pullEventsUrl <- v .: "events_url"
+    pullTimelineUrl <- v .: "timeline_url"
 
     pullRepo <- maybe
       (fail $ "Couldn't get repo from URL " <> T.unpack pullUrl)
