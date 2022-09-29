@@ -10,9 +10,11 @@ module Analyze
 import Control.Applicative ((<|>))
 import Data.List
 import Data.Maybe
+import Data.Set (Set)
 import Data.Text (Text)
 import Data.Time
 import GHC.Stack (HasCallStack)
+import qualified Data.Set as S
 
 import Database
 import EventType
@@ -94,12 +96,13 @@ instance DraftDurationInput MPull where
   ddiEvents = mpEvents
   ddiIsDraft = pullIsDraft . mpPull
 
-ourFirstReviewLatency :: [Text] -> MPull -> Maybe WorkDiffTime
-ourFirstReviewLatency _ MPull{mpPull=Pull{..},mpEvents} =
+ourFirstReviewLatency :: Set Text -> MPull -> Maybe WorkDiffTime
+ourFirstReviewLatency team MPull{mpPull=Pull{..},mpEvents} =
   diffWorkTime <$> fmap pullEventCreated firstReview <*> pure pullCreated
 
   where
-    firstReview = find (\e ->
-        (isReviewEventType . pullEventType) e
-        && pullAuthor /= pullEventActor e
+    firstReview = find (\PullEvent{..} ->
+        isReviewEventType pullEventType
+        && S.member pullEventActor team
+        && pullAuthor /= pullEventActor
       ) mpEvents

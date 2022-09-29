@@ -45,6 +45,7 @@ library
     , base >=4.7 && <5
     , bytestring
     , cassava
+    , containers
     , http-client
     , http-client-tls
     , http-types
@@ -93,6 +94,7 @@ test-suite poda-test
     , base >=4.7 && <5
     , bytestring
     , cassava
+    , containers
     , hspec
     , persistent-sqlite
     , poda
