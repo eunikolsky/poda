@@ -25,6 +25,7 @@ mkPull repo number = Pull
   , pullCreated = UTCTime (fromOrdinalDate 2000 1) (secondsToDiffTime 0)
   , pullMerged = Nothing
   , pullEventsUrl = ""
+  , pullTimelineUrl = ""
   }
 
 mkPullCreated :: Text -> UTCTime -> Pull
@@ -38,4 +39,5 @@ mkPullCreated author created = Pull
   , pullCreated = created
   , pullMerged = Nothing
   , pullEventsUrl = ""
+  , pullTimelineUrl = ""
   }
