@@ -3,10 +3,11 @@
 module Analyze
   ( DraftDurationInput(..)
   , MPull(..)
+  , ReviewAnalysis(..)
   , adjacentPairs
   , draftDuration
-  , ourFirstReviewLatency
-  , theirFirstReviewLatency
+  , ourFirstReview
+  , theirFirstReview
   ) where
 
 import Control.Applicative ((<|>))
@@ -98,21 +99,29 @@ instance DraftDurationInput MPull where
   ddiEvents = mpEvents
   ddiIsDraft = pullIsDraft . mpPull
 
--- | Calculates the length of time between a PR is created and a review from
--- someone on the `team` is left (excluding the PR author).
-ourFirstReviewLatency :: Set Text -> MPull -> Maybe WorkDiffTime
-ourFirstReviewLatency team = firstReviewLatency (`S.member` team)
+-- | Analysis of a review: how long it took since its PR was open and who did
+-- the review.
+data ReviewAnalysis = ReviewAnalysis
+  { raLatency :: !WorkDiffTime
+  -- ^ Length of time between a PR is created and the review.
+  , raActor :: !Text
+  }
+  deriving (Eq, Show)
 
--- | Calculates the length of time between a PR is created and a review from
--- someone _not_ on the `team` is left (excluding the PR author).
-theirFirstReviewLatency :: Set Text -> MPull -> Maybe WorkDiffTime
-theirFirstReviewLatency team = firstReviewLatency (`S.notMember` team)
+-- | Finds the first review by someone on the `team` (excluding the PR author).
+ourFirstReview :: Set Text -> MPull -> Maybe ReviewAnalysis
+ourFirstReview team = firstReviewLatency (`S.member` team)
+
+-- | Finds the first review by someone _not_ on the `team` (excluding the PR author).
+theirFirstReview :: Set Text -> MPull -> Maybe ReviewAnalysis
+theirFirstReview team = firstReviewLatency (`S.notMember` team)
 
 type Predicate a = a -> Bool
 
-firstReviewLatency :: Predicate Text -> MPull -> Maybe WorkDiffTime
-firstReviewLatency shouldUseEventByActor MPull{mpPull=Pull{..},mpEvents} =
-  diffWorkTime <$> fmap pullEventCreated firstReview <*> pure pullCreated
+firstReviewLatency :: Predicate Text -> MPull -> Maybe ReviewAnalysis
+firstReviewLatency shouldUseEventByActor MPull{mpPull=Pull{..},mpEvents} = ReviewAnalysis
+  <$> (diffWorkTime <$> fmap pullEventCreated firstReview <*> pure pullCreated)
+  <*> (pullEventActor <$> firstReview)
 
   where
     firstReview = find (\PullEvent{..} ->

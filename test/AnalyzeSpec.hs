@@ -83,23 +83,27 @@ spec = describe "analyzers" $ do
             pull = defaultUnmergedDDI { fEvents = events }
         draftDuration' pull `shouldBe` Just ((1 + 0.5) * nominalDay)
 
-  describe "ourFirstReviewLatency" $ do
+  describe "ourFirstReview" $ do
     let assertTimeDiffFromCreatedToFirstReview :: EventType -> Expectation
         assertTimeDiffFromCreatedToFirstReview eventType = do
           let created = utcTime "2022-01-01T00:00:00Z"
               firstReview = utcTime "2022-01-04T12:00:00Z"
+              reviewer = "review"
               pullId = toSqlKey 1
               events =
                 [ PullEvent 01 MarkReady "" created pullId
-                , PullEvent 11 eventType "" firstReview pullId
+                , PullEvent 11 eventType reviewer firstReview pullId
                 , PullEvent 12 eventType "" (utcTime "2022-01-06T00:00:00Z") pullId
                 ]
               pull = MPull { mpPull = mkPullCreated "user" created, mpEvents = events }
-          ourFirstReviewLatency (S.singleton "") pull `shouldBe` Just (diffWorkTime firstReview created)
+          ourFirstReview (S.singleton reviewer) pull `shouldBe` Just (ReviewAnalysis
+            { raLatency = diffWorkTime firstReview created
+            , raActor = reviewer
+            })
 
     it "returns Nothing when there are no reviews" $ do
       let pull = MPull { mpPull = mkPull "repo" 1, mpEvents = [] }
-      ourFirstReviewLatency mempty pull `shouldBe` Nothing
+      ourFirstReview mempty pull `shouldBe` Nothing
 
     it "calculates time diff from PR created to first approved review" $ do
       assertTimeDiffFromCreatedToFirstReview Approved
@@ -117,13 +121,17 @@ spec = describe "analyzers" $ do
       let created = utcTime "2022-01-01T00:00:00Z"
           firstReview = utcTime "2022-01-04T12:00:00Z"
           author = "user"
+          reviewer = "another"
           pullId = toSqlKey 1
           events =
             [ PullEvent 11 Commented author (utcTime "2022-01-01T10:00:00Z") pullId
-            , PullEvent 12 Approved "another" firstReview pullId
+            , PullEvent 12 Approved reviewer firstReview pullId
             ]
           pull = MPull { mpPull = mkPullCreated author created, mpEvents = events }
-      ourFirstReviewLatency (S.singleton "another") pull `shouldBe` Just (diffWorkTime firstReview created)
+      ourFirstReview (S.singleton reviewer) pull `shouldBe` Just (ReviewAnalysis
+        { raLatency = diffWorkTime firstReview created
+        , raActor = reviewer
+        })
 
     it "considers reviews from the team" $ do
       let created = utcTime "2022-01-01T00:00:00Z"
@@ -135,9 +143,12 @@ spec = describe "analyzers" $ do
             , PullEvent 12 Approved user firstReview pullId
             ]
           pull = MPull { mpPull = mkPullCreated "author" created, mpEvents = events }
-      ourFirstReviewLatency (S.fromList [user, "author"]) pull `shouldBe` Just (diffWorkTime firstReview created)
+      ourFirstReview (S.fromList [user, "author"]) pull `shouldBe` Just (ReviewAnalysis
+        { raLatency = diffWorkTime firstReview created
+        , raActor = user
+        })
 
-  describe "theirFirstReviewLatency" $ do
+  describe "theirFirstReview" $ do
     let assertTimeDiffFromCreatedToFirstReview :: EventType -> Expectation
         assertTimeDiffFromCreatedToFirstReview eventType = do
           let created = utcTime "2022-01-01T00:00:00Z"
@@ -147,14 +158,17 @@ spec = describe "analyzers" $ do
               events =
                 [ PullEvent 01 MarkReady "author" created pullId
                 , PullEvent 11 eventType user (utcTime "2022-01-02T00:00:00Z") pullId
-                , PullEvent 12 eventType "" firstReview pullId
+                , PullEvent 12 eventType "review" firstReview pullId
                 ]
               pull = MPull { mpPull = mkPullCreated "author" created, mpEvents = events }
-          theirFirstReviewLatency (S.singleton user) pull `shouldBe` Just (diffWorkTime firstReview created)
+          theirFirstReview (S.singleton user) pull `shouldBe` Just (ReviewAnalysis
+            { raLatency = diffWorkTime firstReview created
+            , raActor = "review"
+            })
 
     it "returns Nothing when there are no reviews" $ do
       let pull = MPull { mpPull = mkPull "repo" 1, mpEvents = [] }
-      theirFirstReviewLatency mempty pull `shouldBe` Nothing
+      theirFirstReview mempty pull `shouldBe` Nothing
 
     it "calculates time diff from PR created to first approved review" $ do
       assertTimeDiffFromCreatedToFirstReview Approved
@@ -178,7 +192,10 @@ spec = describe "analyzers" $ do
             , PullEvent 12 Approved "another" firstReview pullId
             ]
           pull = MPull { mpPull = mkPullCreated author created, mpEvents = events }
-      theirFirstReviewLatency (S.singleton "author") pull `shouldBe` Just (diffWorkTime firstReview created)
+      theirFirstReview (S.singleton "author") pull `shouldBe` Just (ReviewAnalysis
+        { raLatency = diffWorkTime firstReview created
+        , raActor = "another"
+        })
 
     it "ignores reviews from the team" $ do
       let created = utcTime "2022-01-01T00:00:00Z"
@@ -190,7 +207,10 @@ spec = describe "analyzers" $ do
             , PullEvent 12 Approved "anonymous" firstReview pullId
             ]
           pull = MPull { mpPull = mkPullCreated "author" created, mpEvents = events }
-      theirFirstReviewLatency (S.fromList [user, "author"]) pull `shouldBe` Just (diffWorkTime firstReview created)
+      theirFirstReview (S.fromList [user, "author"]) pull `shouldBe` Just (ReviewAnalysis
+        { raLatency = diffWorkTime firstReview created
+        , raActor = "anonymous"
+        })
 
 draftDuration' :: (HasCallStack, DraftDurationInput a) => a -> Maybe NominalDiffTime
 draftDuration' = fmap WorkTime.regular . draftDuration

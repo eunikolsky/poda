@@ -44,6 +44,7 @@ library:
   - persistent-sqlite
   - text
   - time
+  - unordered-containers
 
 executables:
   poda:
@@ -57,6 +58,7 @@ executables:
     - poda
     - directory
     - filepath
+    - text
 
 tests:
   poda-test:
@@ -75,3 +77,4 @@ tests:
     - raw-strings-qq
     - text
     - time
+    - unordered-containers

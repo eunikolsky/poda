@@ -1,9 +1,10 @@
 import Data.Functor.Identity
+import Database.Persist.Sql (toSqlKey)
 import Test.Hspec
+import qualified Data.HashMap.Strict as HM
 
 import Analyze (adjacentPairs)
 import Database
-import Database.Persist.Sql (toSqlKey)
 import EventType
 import Lib
 import AnalyzeSpec
@@ -78,6 +79,15 @@ main = hspec $ do
             . adjacentPairs
 
       mergePREvents events0 events1 `shouldSatisfy` isOrderedByCreationTime
+
+  describe "describeReviewActors" $ do
+    it "shows names alphabetically ordered" $ do
+      let actors = HM.fromList [("user", 1), ("author", 1), ("reviewer", 1)]
+      describeReviewActors actors `shouldBe` "author, reviewer, user"
+
+    it "shows names ordered by number of reviews" $ do
+      let actors = HM.fromList [("user", 4), ("author", 4), ("reviewer", 1), ("bob", 2)]
+      describeReviewActors actors `shouldBe` "author×4, user×4, bob×2, reviewer"
 
   WorkDiffTimeSpec.spec
   AnalyzeSpec.spec
