@@ -3,6 +3,7 @@ module Main where
 import Control.Monad (forM_, unless)
 import Data.Aeson (eitherDecodeFileStrict')
 import Data.Csv (encodeDefaultOrderedByName)
+import Data.Time.Clock (getCurrentTime, utctDay)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.Environment (getArgs)
 import System.Exit (die)
@@ -33,9 +34,11 @@ run = do
     printOpenTimes sprint
 
 printOpenTimes :: (Sprint, [PullAnalysis]) -> IO ()
-printOpenTimes (period, prs) = let prGroup = averageWorkOpenTime prs in
+printOpenTimes (period, prs) = let prGroup = averageWorkOpenTime prs in do
+  today <- utctDay <$> getCurrentTime
   putStrLn $ mconcat
     [ "Sprint ", show period
+    , if inSprint period today then " (current sprint)" else ""
     , " had ", show $ prgPRCount prGroup, " PRs"
     , ", ", show $ prgMergedPRCount prGroup, " merged PRs"
     , "; average open time: ", maybe "N/A" (formatDiffTime . arOpenDuration) $ prgAverageResult prGroup

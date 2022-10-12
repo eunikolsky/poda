@@ -59,6 +59,7 @@ executables:
     - directory
     - filepath
     - text
+    - time
 
 tests:
   poda-test:

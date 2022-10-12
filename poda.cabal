@@ -75,6 +75,7 @@ executable poda
     , filepath
     , poda
     , text
+    , time
   default-language: Haskell2010
 
 test-suite poda-test
