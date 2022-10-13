@@ -1,4 +1,5 @@
 import Data.Functor.Identity
+import Data.Time.Clock (NominalDiffTime)
 import Database.Persist.Sql (toSqlKey)
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
@@ -89,5 +90,30 @@ main = hspec $ do
       let actors = HM.fromList [("user", 4), ("author", 4), ("reviewer", 1), ("bob", 2)]
       describeReviewActors actors `shouldBe` "author×4, user×4, bob×2, reviewer"
 
+  describe "formatDiffTime" $ do
+    it "shows weeks to seconds" $ do
+      let duration = mkDuration 10 6 10 10
+      formatDiffTime duration `shouldBe` "10w 6d 10:10"
+
+    it "doesn't show weeks when 0 weeks" $ do
+      let duration = mkDuration 0 6 10 10
+      formatDiffTime duration `shouldBe` "6d 10:10"
+
+    it "doesn't show days when 0 days" $ do
+      let duration = mkDuration 8 0 10 10
+      formatDiffTime duration `shouldBe` "8w 10:10"
+
+    it "prepends zero to one-digit hour" $ do
+      let duration = mkDuration 0 0 1 10
+      formatDiffTime duration `shouldBe` "01:10"
+
+    it "prepends zero to one-digit minute" $ do
+      let duration = mkDuration 0 0 10 1
+      formatDiffTime duration `shouldBe` "10:01"
+
   WorkDiffTimeSpec.spec
   AnalyzeSpec.spec
+
+mkDuration :: Int -> Int -> Int -> Int -> NominalDiffTime
+mkDuration weeks days hours minutes =
+  fromIntegral $ ((((((weeks * 7) + days) * 24) + hours) * 60) + minutes) * 60

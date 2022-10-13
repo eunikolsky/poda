@@ -28,6 +28,7 @@ import Network.HTTP.Client
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types
 import System.IO (hPutStrLn, stderr)
+import Text.Printf (printf)
 import qualified Data.Bifunctor (second)
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
@@ -454,7 +455,24 @@ averageWorkOpenTime prs = PRGroup
         <*> pure (foldl' (\actors review -> HM.insertWith (+) (raActor review) 1 actors) mempty reviews)
 
 formatDiffTime :: NominalDiffTime -> String
-formatDiffTime = formatTime defaultTimeLocale "%ww %Dd %H:%M"
+formatDiffTime diffTime = combine . reverse . snd $ foldl' addComponent (floor @Double $ realToFrac diffTime, []) factors
+  where
+    factors = [sInW, sInD, sInH, sInM]
+    sInM = 60
+    sInH = 60 * sInM
+    sInD = 24 * sInH
+    sInW = 7 * sInD
+
+    addComponent :: (Int, [Int]) -> Int -> (Int, [Int])
+    addComponent (time, components) factor = let (component, rest) = time `divMod` factor
+      in (rest, component : components)
+
+    combine [weeks, days, hours, minutes] = mconcat
+      [ if weeks > 0 then show weeks <> "w " else mempty
+      , if days > 0 then show days <> "d " else mempty
+      , printf "%02d:%02d" hours minutes
+      ]
+    combine xs = error "formatDiffTime: unexpected number of time components: " <> show (length xs)
 
 mapSecond :: (b -> c) -> [(a, b)] -> [(a, c)]
 mapSecond f = map (Data.Bifunctor.second f)
