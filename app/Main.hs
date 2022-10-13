@@ -3,11 +3,13 @@ module Main where
 import Control.Monad (forM_, unless)
 import Data.Aeson (eitherDecodeFileStrict')
 import Data.Csv (encodeDefaultOrderedByName)
+import Data.Time.Clock (getCurrentTime, utctDay)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.Environment (getArgs)
 import System.Exit (die)
 import System.FilePath ((</>))
 import qualified Data.ByteString.Lazy as BL (writeFile)
+import qualified Data.Text as T
 
 import Database
 import Lib
@@ -32,16 +34,20 @@ run = do
     printOpenTimes sprint
 
 printOpenTimes :: (Sprint, [PullAnalysis]) -> IO ()
-printOpenTimes (period, prs) = let prGroup = averageWorkOpenTime prs in
+printOpenTimes (period, prs) = let prGroup = averageWorkOpenTime prs in do
+  today <- utctDay <$> getCurrentTime
   putStrLn $ mconcat
     [ "Sprint ", show period
+    , if inSprint period today then " (current sprint)" else ""
     , " had ", show $ prgPRCount prGroup, " PRs"
     , ", ", show $ prgMergedPRCount prGroup, " merged PRs"
     , "; average open time: ", maybe "N/A" (formatDiffTime . arOpenDuration) $ prgAverageResult prGroup
     , " (ignoring weekends: ", maybe "N/A" (formatDiffTime . arOpenWorkDuration) $ prgAverageResult prGroup, ")"
     , "; avg draft duration (ignoring weekends): ", maybe "0" formatDiffTime $ prgAverageWorkDraftDuration prGroup
-    , "; avg latency of our first review (ignoring weekends): ", maybe "N/A" formatDiffTime $ prgAverageWorkOurFirstReviewLatency prGroup
-    , "; avg latency of their first review (ignoring weekends): ", maybe "N/A" formatDiffTime $ prgAverageWorkTheirFirstReviewLatency prGroup
+    , "; avg latency of our first review (ignoring weekends): ", maybe "N/A" (formatDiffTime . grWorkLatency) $ prgAverageOurFirstReview prGroup
+    , ", reviewers: ", maybe "none" (T.unpack . describeReviewActors . grActors) $ prgAverageOurFirstReview prGroup
+    , "; avg latency of their first review (ignoring weekends): ", maybe "N/A" (formatDiffTime . grWorkLatency) $ prgAverageTheirFirstReview prGroup
+    , ", reviewers: ", maybe "none" (T.unpack . describeReviewActors . grActors) $ prgAverageTheirFirstReview prGroup
     ]
 
 saveSprintFile :: (Sprint, [PullAnalysis]) -> IO ()

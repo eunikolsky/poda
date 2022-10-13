@@ -15,6 +15,7 @@ import Data.Aeson hiding ((.=))
 import Data.ByteString (ByteString)
 import Data.Csv ((.=), DefaultOrdered, ToField, ToNamedRecord, header, headerOrder, namedRecord, toField, toNamedRecord)
 import Data.Function (on)
+import Data.HashMap.Strict (HashMap)
 import Data.List
 import Data.Maybe
 import Data.Text (Text)
@@ -27,9 +28,11 @@ import Network.HTTP.Client
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types
 import System.IO (hPutStrLn, stderr)
+import Text.Printf (printf)
 import qualified Data.Bifunctor (second)
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Ord (Down(..))
 import qualified Data.Set as S
 import qualified Data.Text as T
@@ -119,8 +122,8 @@ data PullAnalysis = PullAnalysis
   -- regardless of any time it might have been closed in between.
   , pullAnalysisDraftDuration :: Maybe WorkDiffTime
   -- ^ Total amount of time the PR was in draft.
-  , pullAnalysisOurFirstReviewLatency :: Maybe WorkDiffTime
-  , pullAnalysisTheirFirstReviewLatency :: Maybe WorkDiffTime
+  , pullAnalysisOurFirstReview :: !(Maybe ReviewAnalysis)
+  , pullAnalysisTheirFirstReview :: !(Maybe ReviewAnalysis)
   }
   deriving Show
 
@@ -146,10 +149,12 @@ instance ToNamedRecord PullAnalysis where
     , "work_open_time" .= fmap WorkTime.work pullAnalysisOpenTime
     , "draft_time" .= fmap WorkTime.regular pullAnalysisDraftDuration
     , "work_draft_time" .= fmap WorkTime.work pullAnalysisDraftDuration
-    , "our_first_review_latency" .= fmap WorkTime.regular pullAnalysisOurFirstReviewLatency
-    , "work_our_first_review_latency" .= fmap WorkTime.work pullAnalysisOurFirstReviewLatency
-    , "their_first_review_latency" .= fmap WorkTime.regular pullAnalysisTheirFirstReviewLatency
-    , "work_their_first_review_latency" .= fmap WorkTime.work pullAnalysisTheirFirstReviewLatency
+    , "our_first_review_latency" .= fmap (WorkTime.regular . raLatency) pullAnalysisOurFirstReview
+    , "work_our_first_review_latency" .= fmap (WorkTime.work . raLatency) pullAnalysisOurFirstReview
+    , "our_first_review_actor" .= fmap raActor pullAnalysisOurFirstReview
+    , "their_first_review_latency" .= fmap (WorkTime.regular . raLatency) pullAnalysisTheirFirstReview
+    , "work_their_first_review_latency" .= fmap (WorkTime.work . raLatency) pullAnalysisTheirFirstReview
+    , "their_first_review_actor" .= fmap raActor pullAnalysisTheirFirstReview
     ]
 
 instance DefaultOrdered PullAnalysis where
@@ -157,8 +162,8 @@ instance DefaultOrdered PullAnalysis where
     [ "repo", "number", "title", "url", "author", "created", "merged"
     , "open_time", "work_open_time"
     , "draft_time", "work_draft_time"
-    , "our_first_review_latency", "work_our_first_review_latency"
-    , "their_first_review_latency", "work_their_first_review_latency"
+    , "our_first_review_latency", "work_our_first_review_latency", "our_first_review_actor"
+    , "their_first_review_latency", "work_their_first_review_latency", "their_first_review_actor"
     ]
 
 -- | Configuration information for the program.
@@ -291,8 +296,8 @@ analyze Config{configLocalTeam} mPull@MPull { mpPull = pull@(Pull { pullCreated,
   { pullAnalysisPull = pull
   , pullAnalysisOpenTime = diffWorkTime <$> pullMerged <*> pure pullCreated
   , pullAnalysisDraftDuration = draftDuration mPull
-  , pullAnalysisOurFirstReviewLatency = ourFirstReviewLatency team mPull
-  , pullAnalysisTheirFirstReviewLatency = theirFirstReviewLatency team mPull
+  , pullAnalysisOurFirstReview = ourFirstReview team mPull
+  , pullAnalysisTheirFirstReview = theirFirstReview team mPull
   }
   where team = S.fromList configLocalTeam
 
@@ -412,13 +417,19 @@ data AverageResult = AverageResult
   , arOpenWorkDuration :: NominalDiffTime
   }
 
+-- | Describes a set of reviews in a PR group.
+data GroupReviews = GroupReviews
+  { grWorkLatency :: !NominalDiffTime
+  , grActors :: !(HashMap Text Int)
+  }
+
 data PRGroup = PRGroup
   { prgPRCount :: Int
   , prgMergedPRCount :: Int
   , prgAverageResult :: Maybe AverageResult
   , prgAverageWorkDraftDuration :: Maybe NominalDiffTime
-  , prgAverageWorkOurFirstReviewLatency :: Maybe NominalDiffTime
-  , prgAverageWorkTheirFirstReviewLatency :: Maybe NominalDiffTime
+  , prgAverageOurFirstReview :: !(Maybe GroupReviews)
+  , prgAverageTheirFirstReview :: !(Maybe GroupReviews)
   }
 
 averageWorkOpenTime :: [PullAnalysis] -> PRGroup
@@ -432,12 +443,36 @@ averageWorkOpenTime prs = PRGroup
   , prgAverageWorkDraftDuration =
       let draftDurations :: [NominalDiffTime] = mapMaybe (fmap WorkTime.work . pullAnalysisDraftDuration) prs
       in avg draftDurations
-  , prgAverageWorkOurFirstReviewLatency = avg $ mapMaybe (fmap WorkTime.work . pullAnalysisOurFirstReviewLatency) prs
-  , prgAverageWorkTheirFirstReviewLatency = avg $ mapMaybe (fmap WorkTime.work . pullAnalysisTheirFirstReviewLatency) prs
+  , prgAverageOurFirstReview = groupReviews pullAnalysisOurFirstReview -- avg $ mapMaybe (fmap (WorkTime.work . raLatency) . pullAnalysisOurFirstReview) prs
+  , prgAverageTheirFirstReview = groupReviews pullAnalysisTheirFirstReview -- avg $ mapMaybe (fmap (WorkTime.work . raLatency) . pullAnalysisTheirFirstReview) prs
   }
 
+  where
+    groupReviews :: (PullAnalysis -> Maybe ReviewAnalysis) -> Maybe GroupReviews
+    groupReviews reviewSelector = let reviews = mapMaybe reviewSelector prs
+      in GroupReviews
+        <$> avg (fmap (WorkTime.work . raLatency) reviews)
+        <*> pure (foldl' (\actors review -> HM.insertWith (+) (raActor review) 1 actors) mempty reviews)
+
 formatDiffTime :: NominalDiffTime -> String
-formatDiffTime = formatTime defaultTimeLocale "%ww %Dd %H:%M"
+formatDiffTime diffTime = combine . reverse . snd $ foldl' addComponent (floor @Double $ realToFrac diffTime, []) factors
+  where
+    factors = [sInW, sInD, sInH, sInM]
+    sInM = 60
+    sInH = 60 * sInM
+    sInD = 24 * sInH
+    sInW = 7 * sInD
+
+    addComponent :: (Int, [Int]) -> Int -> (Int, [Int])
+    addComponent (time, components) factor = let (component, rest) = time `divMod` factor
+      in (rest, component : components)
+
+    combine [weeks, days, hours, minutes] = mconcat
+      [ if weeks > 0 then show weeks <> "w " else mempty
+      , if days > 0 then show days <> "d " else mempty
+      , printf "%02d:%02d" hours minutes
+      ]
+    combine xs = error "formatDiffTime: unexpected number of time components: " <> show (length xs)
 
 mapSecond :: (b -> c) -> [(a, b)] -> [(a, c)]
 mapSecond f = map (Data.Bifunctor.second f)
@@ -462,3 +497,12 @@ groupBySprint firstSprint prs = (\s -> (s, filter (inSprint s . prDay) prs)) <$>
     newestPR = prDay . maximumBy (compare `on` pullCreated . pullAnalysisPull) $ prs
     allSprints = takeWhile (\(Sprint d) -> d < newestPR) $ iterate nextSprint firstSprint
     prDay = utctDay . pullCreated . pullAnalysisPull
+
+-- | Shows review actors as a user-readable text, sorted by descending number of
+-- reviews, then by ascending name.
+describeReviewActors :: HashMap Text Int -> Text
+describeReviewActors = T.intercalate ", " . fmap showActor . sortBy countAndName  . HM.toList
+  where
+    countAndName = compare `on` (\(name, reviews) -> (Data.Ord.Down reviews, name))
+    showActor (name, reviews) = name
+      <> (if reviews > 1 then "×" <> T.pack (show reviews) else "")
