@@ -37,7 +37,6 @@ sprintReport today (period, prs) = let prGroup = averageWorkOpenTime prs in
 reportHeader :: Config -> Day -> T.Text
 reportHeader config today = T.intercalate "\n\n" $ map (T.pack . concat)
   [ [ "= Pull Requests Report" ]
-  , [ "Generated on ", show today, "." ]
   , [ "This report analyzed PRs by "
     , T.unpack . T.intercalate ", " . fmap (wrapIn "`") . sort $ configLocalTeam config
     , " in repositories: "
@@ -45,5 +44,6 @@ reportHeader config today = T.intercalate "\n\n" $ map (T.pack . concat)
     , "."
     ]
   , [ "*All times are work times (that is, ignoring weekends)!*" ]
+  , [ "Generated on ", show today, "." ]
   , [ "" ]
   ]
