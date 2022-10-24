@@ -183,7 +183,7 @@ instance FromJSON Config
 
 -- | Contains `owner/repo`.
 newtype Repo = Repo { unRepo :: Text }
-  deriving Show
+  deriving (Eq, Ord, Show)
 
 instance FromJSON Repo where
   parseJSON = fmap Repo . parseJSON
@@ -528,5 +528,8 @@ describeReviewActors :: HashMap Text Int -> Text
 describeReviewActors = T.intercalate ", " . fmap showActor . sortBy countAndName  . HM.toList
   where
     countAndName = compare `on` (\(name, reviews) -> (Data.Ord.Down reviews, name))
-    showActor (name, reviews) = name
+    showActor (name, reviews) = wrapIn "`" name
       <> (if reviews > 1 then "×" <> T.pack (show reviews) else "")
+
+wrapIn :: T.Text -> T.Text -> T.Text
+wrapIn surround t = surround <> t <> surround
