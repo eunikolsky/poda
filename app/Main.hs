@@ -3,6 +3,7 @@ module Main where
 import Control.Monad (forM_, unless)
 import Data.Aeson (eitherDecodeFileStrict')
 import Data.Csv (encodeDefaultOrderedByName)
+import Data.Time.Calendar (Day)
 import Data.Time.Clock (getCurrentTime, utctDay)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.Environment (getArgs)
@@ -40,13 +41,13 @@ run (Run offline) = do
 
   BL.writeFile "pulls.csv" $ encodeDefaultOrderedByName a
   let bySprint = groupBySprint (Sprint $ configFirstSprintStart config) a
+  today <- utctDay <$> getCurrentTime
   forM_ bySprint $ \sprint -> do
     saveSprintFile sprint
-    printOpenTimes sprint
+    printOpenTimes today sprint
 
-printOpenTimes :: (Sprint, [PullAnalysis]) -> IO ()
-printOpenTimes (period, prs) = let prGroup = averageWorkOpenTime prs in do
-  today <- utctDay <$> getCurrentTime
+printOpenTimes :: Day -> (Sprint, [PullAnalysis]) -> IO ()
+printOpenTimes today (period, prs) = let prGroup = averageWorkOpenTime prs in do
   putStrLn $ mconcat
     [ "Sprint ", show period
     , if inSprint period today then " (current sprint)" else ""
