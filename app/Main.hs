@@ -1,6 +1,6 @@
 module Main where
 
-import Control.Monad (forM_, unless)
+import Control.Monad (forM, unless)
 import Data.Aeson (eitherDecodeFileStrict')
 import Data.Csv (encodeDefaultOrderedByName)
 import Data.Time.Calendar (Day)
@@ -11,6 +11,7 @@ import System.Exit (die)
 import System.FilePath ((</>))
 import qualified Data.ByteString.Lazy as BL (writeFile)
 import qualified Data.Text as T
+import qualified Data.Text.IO as T (putStr)
 
 import Database
 import Lib
@@ -42,13 +43,14 @@ run (Run offline) = do
   BL.writeFile "pulls.csv" $ encodeDefaultOrderedByName a
   let bySprint = groupBySprint (Sprint $ configFirstSprintStart config) a
   today <- utctDay <$> getCurrentTime
-  forM_ bySprint $ \sprint -> do
+  reportTexts <- forM bySprint $ \sprint -> do
     saveSprintFile sprint
-    printOpenTimes today sprint
+    pure $ openTimesReport today sprint
+  T.putStr $ T.unlines reportTexts
 
-printOpenTimes :: Day -> (Sprint, [PullAnalysis]) -> IO ()
-printOpenTimes today (period, prs) = let prGroup = averageWorkOpenTime prs in do
-  putStrLn $ mconcat
+openTimesReport :: Day -> (Sprint, [PullAnalysis]) -> T.Text
+openTimesReport today (period, prs) = let prGroup = averageWorkOpenTime prs in
+  T.pack $ mconcat
     [ "Sprint ", show period
     , if inSprint period today then " (current sprint)" else ""
     , " had ", show $ prgPRCount prGroup, " PRs"
