@@ -191,6 +191,28 @@ instance FromJSON Repo where
 maxConcurrentDownloads :: MaxResources
 maxConcurrentDownloads = MaxResources 4
 
+-- | Returns a list of PRs from the database w/o doing any network requests.
+listLocalPRs :: IO [MPull]
+listLocalPRs = do
+  (pulls, pullEvents) <- runSqlite dbPath $
+    (,) <$> selectList @Pull [] [] <*> selectList @PullEvent [] []
+
+  let
+      -- map `PullId -> Pull`
+      pullMap = foldl'
+        (\hm pull -> HM.insert (fromSqlKey $ entityKey pull) (entityVal pull) hm)
+        mempty
+        pulls
+      -- map `PullId -> [PullEvent]`
+      eventsMap = foldl'
+        (\hm event -> HM.insertWith (<>) (fromSqlKey . pullEventPull . entityVal $ event) (pure $ entityVal event) hm)
+        mempty
+        pullEvents
+
+  pure $ HM.foldMapWithKey
+    (\pullId pull -> [MPull {mpPull=pull, mpEvents=maybe mempty sortPREvents $ eventsMap HM.!? pullId}])
+    pullMap
+
 -- | List PRs in a repository when they are created by a member of the @configLocalTeam@.
 listPRs :: Config -> IO [MPull]
 listPRs config = do
@@ -287,7 +309,11 @@ downloadPREvents logLock config manager (Pull { pullEventsUrl, pullTimelineUrl }
 
 -- | Merges two lists of `PullEvent`s and the output is ordered by increasing creation time.
 mergePREvents :: [PullEvent] -> [PullEvent] -> [PullEvent]
-mergePREvents events0 = sortBy (compare `on` pullEventCreated) . (++) events0
+mergePREvents events0 = sortPREvents . (++) events0
+
+-- | Sort the PR events by increasing creation time, which is a requirement of `MPull`.
+sortPREvents :: [PullEvent] -> [PullEvent]
+sortPREvents = sortBy (compare `on` pullEventCreated)
 
 analyze :: Config -> MPull -> PullAnalysis
 analyze Config{configLocalTeam} mPull@MPull { mpPull = pull@(Pull { pullCreated, pullMerged }) } = PullAnalysis

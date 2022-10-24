@@ -15,17 +15,28 @@ import Database
 import Lib
 
 main :: IO ()
-main = do
-  args <- getArgs
-  case args of
-    ["--drop-derived-tables"] -> dropDerivedTables
-    _ -> run
+main = parseArgs >>= run
 
-run :: IO ()
-run = do
+newtype Offline = Offline Bool
+data Action = DropDerivedTables | Run Offline
+
+parseArgs :: IO Action
+parseArgs = do
+  args <- getArgs
+  pure $ case args of
+    ["--drop-derived-tables"] -> DropDerivedTables
+    ["--offline"] -> Run (Offline True)
+    [] -> Run (Offline False)
+    _ -> error "Unknown arguments"
+
+run :: Action -> IO ()
+run DropDerivedTables = dropDerivedTables
+run (Run offline) = do
   config <- loadConfig
-  migrateDB
-  a <- fmap (analyze config) <$> listPRs config
+  pulls <- case offline of
+    Offline False -> migrateDB >> listPRs config
+    Offline True -> listLocalPRs
+  let a = fmap (analyze config) pulls
 
   BL.writeFile "pulls.csv" $ encodeDefaultOrderedByName a
   let bySprint = groupBySprint (Sprint $ configFirstSprintStart config) a
