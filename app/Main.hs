@@ -41,7 +41,7 @@ run (Run offline) = do
   let a = fmap (analyze config) pulls
 
   BL.writeFile "pulls.csv" $ encodeDefaultOrderedByName a
-  let bySprint = groupBySprint (Sprint $ configFirstSprintStart config) a
+  let bySprint = reverse $ groupBySprint (Sprint $ configFirstSprintStart config) a
   today <- utctDay <$> getCurrentTime
   reportTexts <- forM bySprint $ \sprint -> do
     saveSprintFile sprint
