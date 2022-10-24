@@ -10,7 +10,7 @@ import System.Exit (die)
 import System.FilePath ((</>))
 import qualified Data.ByteString.Lazy as BL (writeFile)
 import qualified Data.Text as T
-import qualified Data.Text.IO as T (putStr)
+import qualified Data.Text.IO as T (writeFile)
 
 import Asciidoc
 import Database
@@ -46,7 +46,7 @@ run (Run offline) = do
   reportTexts <- forM bySprint $ \sprint -> do
     saveSprintFile sprint
     pure $ sprintReport today sprint
-  T.putStr $ reportHeader config today <> T.unlines reportTexts
+  T.writeFile "report.adoc" $ reportHeader config today <> T.unlines reportTexts
 
 saveSprintFile :: (Sprint, [PullAnalysis]) -> IO ()
 saveSprintFile (sprint, prs) = do
