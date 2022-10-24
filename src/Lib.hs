@@ -191,9 +191,7 @@ instance FromJSON Repo where
 maxConcurrentDownloads :: MaxResources
 maxConcurrentDownloads = MaxResources 4
 
--- | List PRs in a repository when:
--- * they have the given @configLabel@;
--- * or they are created by a member of the @configLocalTeam@.
+-- | List PRs in a repository when they are created by a member of the @configLocalTeam@.
 listPRs :: Config -> IO [MPull]
 listPRs config = do
   manager <- newManager tlsManagerSettings
