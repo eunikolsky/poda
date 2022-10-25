@@ -36,14 +36,13 @@ sprintReport today (period, prs) = let prGroup = averageWorkOpenTime prs in
 
 reportHeader :: Config -> Day -> T.Text
 reportHeader config today = T.intercalate "\n\n" $ map (T.pack . concat)
-  [ [ "= Pull Requests Report" ]
+  [ [ "= Pull Requests Report (", show today, ")" ]
   , [ "This report analyzed PRs by "
     , T.unpack . T.intercalate ", " . fmap (wrapIn "`") . sort $ configLocalTeam config
-    , " in repositories: "
+    , " (called _our_ reviewers below) in repositories: "
     , T.unpack . T.intercalate ", " . fmap (wrapIn "`" . unRepo) . sort $ configRepos config
-    , "."
+    , ". All other reviewers are called _their_ reviewers below."
     ]
   , [ "*All times are work times (that is, ignoring weekends)!*" ]
-  , [ "Generated on ", show today, "." ]
   , [ "" ]
   ]
