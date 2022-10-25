@@ -8,7 +8,6 @@
 
 module Lib where
 
-import Control.Concurrent
 import Control.Monad
 import Control.Monad.IO.Class
 import Data.Aeson hiding ((.=))
@@ -27,7 +26,7 @@ import GHC.Generics hiding (from, to)
 import Network.HTTP.Client
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types
-import System.IO (hPutStrLn, stderr)
+import System.Console.AsciiProgress
 import Text.Printf (printf)
 import qualified Data.Bifunctor (second)
 import qualified Data.ByteString.Char8 as C
@@ -215,14 +214,13 @@ listLocalPRs = do
 
 -- | List PRs in a repository when they are created by a member of the @configLocalTeam@.
 listPRs :: Config -> IO [MPull]
-listPRs config = do
+listPRs config = displayConsoleRegions $ do
   manager <- newManager tlsManagerSettings
 
-  logLock <- newMVar ()
-
   let authorRepos = [(author, repo) | author <- configLocalTeam config, repo <- configRepos config]
+  prsProgress <- progressBar "Downloading PRs" (length authorRepos)
   authorsPRs <- forConcurrentlyN maxConcurrentDownloads authorRepos $ \(author, repo) ->
-    listAuthorPRs logLock author repo manager
+    listAuthorPRs author repo manager <* tick prsProgress
   let prs = sortByRepoAndNumberDesc . nub $ concat authorsPRs
 
   prKeys <- runSqlite dbPath $ do
@@ -232,7 +230,8 @@ listPRs config = do
     deleteWhere ([] :: [Filter Pull])
     insertMany prs
 
-  mPulls <- downloadAllPREvents config manager $ zip prs prKeys
+  eventsProgress <- progressBar "Downloading PR events" (length prs)
+  mPulls <- downloadAllPREvents config manager eventsProgress $ zip prs prKeys
 
   runSqlite dbPath $ do
     deleteWhere ([] :: [Filter PullEvent])
@@ -241,11 +240,11 @@ listPRs config = do
   pure mPulls
 
   where
-    listAuthorPRs :: MVar () -> Text -> Repo -> Manager -> IO [Pull]
-    listAuthorPRs logLock author = listPRs' logLock $ "creator=" <> author
+    listAuthorPRs :: Text -> Repo -> Manager -> IO [Pull]
+    listAuthorPRs author = listPRs' $ "creator=" <> author
 
-    listPRs' :: MVar () -> Text -> Repo -> Manager -> IO [Pull]
-    listPRs' logLock parameter repo manager = do
+    listPRs' :: Text -> Repo -> Manager -> IO [Pull]
+    listPRs' parameter repo manager = do
       let { link = GithubPath . mconcat $
         [ "https://api.github.com/repos/", unRepo repo
         , "/issues?per_page=100&state=all&", parameter
@@ -253,7 +252,6 @@ listPRs config = do
       }
       flip unfoldrM link $ \nextLink -> do
         request <- githubRequest config nextLink
-        logStr logLock $ show nextLink
         response <- cachedHTTPLbs request manager
 
         pure
@@ -261,34 +259,27 @@ listPRs config = do
           , GithubPath <$> httpRNextLink response
           )
 
+    progressBar :: Text -> Int -> IO ProgressBar
+    progressBar task total = newProgressBar def
+      { pgTotal = fromIntegral total
+      , pgFormat = T.unpack $ task <> " :percent [:bar] :current/:total (:elapsed s elapsed, ETA :eta s)"
+      }
+
 sortByRepoAndNumberDesc :: [Pull] -> [Pull]
 sortByRepoAndNumberDesc = sortOn (\Pull{..} -> (pullRepo, Data.Ord.Down pullNumber))
-
-logStr :: MVar () -> String -> IO ()
-logStr logLock = withMVar logLock . const . hPutStrLn stderr <=< addTime
-  where
-    addTime :: String -> IO String
-    addTime s = (\t tz -> mconcat [show . snd . utcToLocalTimeOfDay tz . timeToTimeOfDay . utctDayTime $ t, " ", s])
-      <$> getCurrentTime
-      <*> getCurrentTimeZone
 
 -- FIXME I hate how I have to pass Key separately because it's required by PullEvent;
 -- on the other hand, Pull as is doesn't know its events…
 -- TODO use Reader?
-downloadAllPREvents :: Config -> Manager -> [(Pull, SQL.Key Pull)] -> IO [MPull]
-downloadAllPREvents config manager pulls = do
-  logLock <- newMVar ()
-
-  let
-    worker :: (Pull, SQL.Key Pull) -> IO MPull
-    worker keyedPull@(pull, _) = do
-      events <- downloadPREvents logLock config manager keyedPull
+downloadAllPREvents :: Config -> Manager -> ProgressBar -> [(Pull, SQL.Key Pull)] -> IO [MPull]
+downloadAllPREvents config manager progress pulls =
+  forConcurrentlyN maxConcurrentDownloads pulls $ \keyedPull@(pull, _) -> do
+      events <- downloadPREvents config manager keyedPull
+      tick progress
       pure $ MPull pull events
 
-  forConcurrentlyN maxConcurrentDownloads pulls worker
-
-downloadPREvents :: MVar () -> Config -> Manager -> (Pull, SQL.Key Pull) -> IO [PullEvent]
-downloadPREvents logLock config manager (Pull { pullEventsUrl, pullTimelineUrl }, key) = do
+downloadPREvents :: Config -> Manager -> (Pull, SQL.Key Pull) -> IO [PullEvent]
+downloadPREvents config manager (Pull { pullEventsUrl, pullTimelineUrl }, key) = do
   events <- download pullEventsUrl parsePullEvents "events"
   timelineEvents <- download pullTimelineUrl parsePullTimelineEvents "timeline events"
   pure $ mergePREvents events timelineEvents
@@ -298,7 +289,6 @@ downloadPREvents logLock config manager (Pull { pullEventsUrl, pullTimelineUrl }
       let link = GithubPath . mconcat $ [url, "?per_page=100"]
       in flip unfoldrM link $ \nextLink -> do
         request <- githubRequest config nextLink
-        logStr logLock $ show nextLink
         response <- cachedHTTPLbs request manager
 
         events <- case parse key (httpRData response) of

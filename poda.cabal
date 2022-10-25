@@ -42,6 +42,7 @@ library
   ghc-options: -Wall
   build-depends:
       aeson
+    , ascii-progress
     , async
     , base >=4.7 && <5
     , bytestring
