@@ -494,7 +494,7 @@ mapSecond f = map (Data.Bifunctor.second f)
 newtype Sprint = Sprint Day -- ^ Start day of a 2-week's long sprint.
 
 instance Show Sprint where
-  show (Sprint d) = mconcat ["[", show d, "…", show $ addDays 13 d, "]"]
+  show (Sprint d) = mconcat [show d, "…", show $ addDays 13 d]
 
 nextSprint :: Sprint -> Sprint
 nextSprint (Sprint d) = Sprint $ addDays 14 d
