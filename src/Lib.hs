@@ -457,8 +457,8 @@ averageWorkOpenTime prs = PRGroup
   , prgAverageWorkDraftDuration =
       let draftDurations :: [NominalDiffTime] = mapMaybe (fmap WorkTime.work . pullAnalysisDraftDuration) prs
       in avg draftDurations
-  , prgAverageOurFirstReview = groupReviews pullAnalysisOurFirstReview -- avg $ mapMaybe (fmap (WorkTime.work . raLatency) . pullAnalysisOurFirstReview) prs
-  , prgAverageTheirFirstReview = groupReviews pullAnalysisTheirFirstReview -- avg $ mapMaybe (fmap (WorkTime.work . raLatency) . pullAnalysisTheirFirstReview) prs
+  , prgAverageOurFirstReview = groupReviews pullAnalysisOurFirstReview
+  , prgAverageTheirFirstReview = groupReviews pullAnalysisTheirFirstReview
   }
 
   where
