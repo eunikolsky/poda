@@ -8,7 +8,6 @@
 
 module Lib where
 
-import Control.Concurrent
 import Control.Monad
 import Control.Monad.IO.Class
 import Data.Aeson hiding ((.=))
@@ -27,7 +26,7 @@ import GHC.Generics hiding (from, to)
 import Network.HTTP.Client
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types
-import System.IO (hPutStrLn, stderr)
+import System.Console.AsciiProgress
 import Text.Printf (printf)
 import qualified Data.Bifunctor (second)
 import qualified Data.ByteString.Char8 as C
@@ -183,7 +182,7 @@ instance FromJSON Config
 
 -- | Contains `owner/repo`.
 newtype Repo = Repo { unRepo :: Text }
-  deriving Show
+  deriving (Eq, Ord, Show)
 
 instance FromJSON Repo where
   parseJSON = fmap Repo . parseJSON
@@ -191,18 +190,37 @@ instance FromJSON Repo where
 maxConcurrentDownloads :: MaxResources
 maxConcurrentDownloads = MaxResources 4
 
--- | List PRs in a repository when:
--- * they have the given @configLabel@;
--- * or they are created by a member of the @configLocalTeam@.
+-- | Returns a list of PRs from the database w/o doing any network requests.
+listLocalPRs :: IO [MPull]
+listLocalPRs = do
+  (pulls, pullEvents) <- runSqlite dbPath $
+    (,) <$> selectList @Pull [] [] <*> selectList @PullEvent [] []
+
+  let
+      -- map `PullId -> Pull`
+      pullMap = foldl'
+        (\hm pull -> HM.insert (fromSqlKey $ entityKey pull) (entityVal pull) hm)
+        mempty
+        pulls
+      -- map `PullId -> [PullEvent]`
+      eventsMap = foldl'
+        (\hm event -> HM.insertWith (<>) (fromSqlKey . pullEventPull . entityVal $ event) (pure $ entityVal event) hm)
+        mempty
+        pullEvents
+
+  pure $ HM.foldMapWithKey
+    (\pullId pull -> [MPull {mpPull=pull, mpEvents=maybe mempty sortPREvents $ eventsMap HM.!? pullId}])
+    pullMap
+
+-- | List PRs in a repository when they are created by a member of the @configLocalTeam@.
 listPRs :: Config -> IO [MPull]
-listPRs config = do
+listPRs config = displayConsoleRegions $ do
   manager <- newManager tlsManagerSettings
 
-  logLock <- newMVar ()
-
   let authorRepos = [(author, repo) | author <- configLocalTeam config, repo <- configRepos config]
+  prsProgress <- progressBar "Downloading PRs" (length authorRepos)
   authorsPRs <- forConcurrentlyN maxConcurrentDownloads authorRepos $ \(author, repo) ->
-    listAuthorPRs logLock author repo manager
+    listAuthorPRs author repo manager <* tick prsProgress
   let prs = sortByRepoAndNumberDesc . nub $ concat authorsPRs
 
   prKeys <- runSqlite dbPath $ do
@@ -212,7 +230,8 @@ listPRs config = do
     deleteWhere ([] :: [Filter Pull])
     insertMany prs
 
-  mPulls <- downloadAllPREvents config manager $ zip prs prKeys
+  eventsProgress <- progressBar "Downloading PR events" (length prs)
+  mPulls <- downloadAllPREvents config manager eventsProgress $ zip prs prKeys
 
   runSqlite dbPath $ do
     deleteWhere ([] :: [Filter PullEvent])
@@ -221,11 +240,11 @@ listPRs config = do
   pure mPulls
 
   where
-    listAuthorPRs :: MVar () -> Text -> Repo -> Manager -> IO [Pull]
-    listAuthorPRs logLock author = listPRs' logLock $ "creator=" <> author
+    listAuthorPRs :: Text -> Repo -> Manager -> IO [Pull]
+    listAuthorPRs author = listPRs' $ "creator=" <> author
 
-    listPRs' :: MVar () -> Text -> Repo -> Manager -> IO [Pull]
-    listPRs' logLock parameter repo manager = do
+    listPRs' :: Text -> Repo -> Manager -> IO [Pull]
+    listPRs' parameter repo manager = do
       let { link = GithubPath . mconcat $
         [ "https://api.github.com/repos/", unRepo repo
         , "/issues?per_page=100&state=all&", parameter
@@ -233,7 +252,6 @@ listPRs config = do
       }
       flip unfoldrM link $ \nextLink -> do
         request <- githubRequest config nextLink
-        logStr logLock $ show nextLink
         response <- cachedHTTPLbs request manager
 
         pure
@@ -241,34 +259,27 @@ listPRs config = do
           , GithubPath <$> httpRNextLink response
           )
 
+    progressBar :: Text -> Int -> IO ProgressBar
+    progressBar task total = newProgressBar def
+      { pgTotal = fromIntegral total
+      , pgFormat = T.unpack $ task <> " :percent [:bar] :current/:total (:elapsed s elapsed, ETA :eta s)"
+      }
+
 sortByRepoAndNumberDesc :: [Pull] -> [Pull]
 sortByRepoAndNumberDesc = sortOn (\Pull{..} -> (pullRepo, Data.Ord.Down pullNumber))
-
-logStr :: MVar () -> String -> IO ()
-logStr logLock = withMVar logLock . const . hPutStrLn stderr <=< addTime
-  where
-    addTime :: String -> IO String
-    addTime s = (\t tz -> mconcat [show . snd . utcToLocalTimeOfDay tz . timeToTimeOfDay . utctDayTime $ t, " ", s])
-      <$> getCurrentTime
-      <*> getCurrentTimeZone
 
 -- FIXME I hate how I have to pass Key separately because it's required by PullEvent;
 -- on the other hand, Pull as is doesn't know its events…
 -- TODO use Reader?
-downloadAllPREvents :: Config -> Manager -> [(Pull, SQL.Key Pull)] -> IO [MPull]
-downloadAllPREvents config manager pulls = do
-  logLock <- newMVar ()
-
-  let
-    worker :: (Pull, SQL.Key Pull) -> IO MPull
-    worker keyedPull@(pull, _) = do
-      events <- downloadPREvents logLock config manager keyedPull
+downloadAllPREvents :: Config -> Manager -> ProgressBar -> [(Pull, SQL.Key Pull)] -> IO [MPull]
+downloadAllPREvents config manager progress pulls =
+  forConcurrentlyN maxConcurrentDownloads pulls $ \keyedPull@(pull, _) -> do
+      events <- downloadPREvents config manager keyedPull
+      tick progress
       pure $ MPull pull events
 
-  forConcurrentlyN maxConcurrentDownloads pulls worker
-
-downloadPREvents :: MVar () -> Config -> Manager -> (Pull, SQL.Key Pull) -> IO [PullEvent]
-downloadPREvents logLock config manager (Pull { pullEventsUrl, pullTimelineUrl }, key) = do
+downloadPREvents :: Config -> Manager -> (Pull, SQL.Key Pull) -> IO [PullEvent]
+downloadPREvents config manager (Pull { pullEventsUrl, pullTimelineUrl }, key) = do
   events <- download pullEventsUrl parsePullEvents "events"
   timelineEvents <- download pullTimelineUrl parsePullTimelineEvents "timeline events"
   pure $ mergePREvents events timelineEvents
@@ -278,7 +289,6 @@ downloadPREvents logLock config manager (Pull { pullEventsUrl, pullTimelineUrl }
       let link = GithubPath . mconcat $ [url, "?per_page=100"]
       in flip unfoldrM link $ \nextLink -> do
         request <- githubRequest config nextLink
-        logStr logLock $ show nextLink
         response <- cachedHTTPLbs request manager
 
         events <- case parse key (httpRData response) of
@@ -289,7 +299,11 @@ downloadPREvents logLock config manager (Pull { pullEventsUrl, pullTimelineUrl }
 
 -- | Merges two lists of `PullEvent`s and the output is ordered by increasing creation time.
 mergePREvents :: [PullEvent] -> [PullEvent] -> [PullEvent]
-mergePREvents events0 = sortBy (compare `on` pullEventCreated) . (++) events0
+mergePREvents events0 = sortPREvents . (++) events0
+
+-- | Sort the PR events by increasing creation time, which is a requirement of `MPull`.
+sortPREvents :: [PullEvent] -> [PullEvent]
+sortPREvents = sortBy (compare `on` pullEventCreated)
 
 analyze :: Config -> MPull -> PullAnalysis
 analyze Config{configLocalTeam} mPull@MPull { mpPull = pull@(Pull { pullCreated, pullMerged }) } = PullAnalysis
@@ -443,8 +457,8 @@ averageWorkOpenTime prs = PRGroup
   , prgAverageWorkDraftDuration =
       let draftDurations :: [NominalDiffTime] = mapMaybe (fmap WorkTime.work . pullAnalysisDraftDuration) prs
       in avg draftDurations
-  , prgAverageOurFirstReview = groupReviews pullAnalysisOurFirstReview -- avg $ mapMaybe (fmap (WorkTime.work . raLatency) . pullAnalysisOurFirstReview) prs
-  , prgAverageTheirFirstReview = groupReviews pullAnalysisTheirFirstReview -- avg $ mapMaybe (fmap (WorkTime.work . raLatency) . pullAnalysisTheirFirstReview) prs
+  , prgAverageOurFirstReview = groupReviews pullAnalysisOurFirstReview
+  , prgAverageTheirFirstReview = groupReviews pullAnalysisTheirFirstReview
   }
 
   where
@@ -480,7 +494,7 @@ mapSecond f = map (Data.Bifunctor.second f)
 newtype Sprint = Sprint Day -- ^ Start day of a 2-week's long sprint.
 
 instance Show Sprint where
-  show (Sprint d) = mconcat ["[", show d, "…", show $ addDays 13 d, "]"]
+  show (Sprint d) = mconcat [show d, "…", show $ addDays 13 d]
 
 nextSprint :: Sprint -> Sprint
 nextSprint (Sprint d) = Sprint $ addDays 14 d
@@ -504,5 +518,8 @@ describeReviewActors :: HashMap Text Int -> Text
 describeReviewActors = T.intercalate ", " . fmap showActor . sortBy countAndName  . HM.toList
   where
     countAndName = compare `on` (\(name, reviews) -> (Data.Ord.Down reviews, name))
-    showActor (name, reviews) = name
+    showActor (name, reviews) = wrapIn "`" name
       <> (if reviews > 1 then "×" <> T.pack (show reviews) else "")
+
+wrapIn :: T.Text -> T.Text -> T.Text
+wrapIn surround t = surround <> t <> surround

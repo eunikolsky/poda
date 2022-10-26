@@ -1,6 +1,6 @@
 module Main where
 
-import Control.Monad (forM_, unless)
+import Control.Monad (forM, unless)
 import Data.Aeson (eitherDecodeFileStrict')
 import Data.Csv (encodeDefaultOrderedByName)
 import Data.Time.Clock (getCurrentTime, utctDay)
@@ -10,45 +10,43 @@ import System.Exit (die)
 import System.FilePath ((</>))
 import qualified Data.ByteString.Lazy as BL (writeFile)
 import qualified Data.Text as T
+import qualified Data.Text.IO as T (writeFile)
 
+import Asciidoc
 import Database
 import Lib
 
 main :: IO ()
-main = do
-  args <- getArgs
-  case args of
-    ["--drop-derived-tables"] -> dropDerivedTables
-    _ -> run
+main = parseArgs >>= run
 
-run :: IO ()
-run = do
+newtype Offline = Offline Bool
+data Action = DropDerivedTables | Run Offline
+
+parseArgs :: IO Action
+parseArgs = do
+  args <- getArgs
+  pure $ case args of
+    ["--drop-derived-tables"] -> DropDerivedTables
+    ["--offline"] -> Run (Offline True)
+    [] -> Run (Offline False)
+    _ -> error "Unknown arguments"
+
+run :: Action -> IO ()
+run DropDerivedTables = dropDerivedTables
+run (Run offline) = do
   config <- loadConfig
-  migrateDB
-  a <- fmap (analyze config) <$> listPRs config
+  pulls <- case offline of
+    Offline False -> migrateDB >> listPRs config
+    Offline True -> listLocalPRs
+  let a = fmap (analyze config) pulls
 
   BL.writeFile "pulls.csv" $ encodeDefaultOrderedByName a
-  let bySprint = groupBySprint (Sprint $ configFirstSprintStart config) a
-  forM_ bySprint $ \sprint -> do
-    saveSprintFile sprint
-    printOpenTimes sprint
-
-printOpenTimes :: (Sprint, [PullAnalysis]) -> IO ()
-printOpenTimes (period, prs) = let prGroup = averageWorkOpenTime prs in do
+  let bySprint = reverse $ groupBySprint (Sprint $ configFirstSprintStart config) a
   today <- utctDay <$> getCurrentTime
-  putStrLn $ mconcat
-    [ "Sprint ", show period
-    , if inSprint period today then " (current sprint)" else ""
-    , " had ", show $ prgPRCount prGroup, " PRs"
-    , ", ", show $ prgMergedPRCount prGroup, " merged PRs"
-    , "; average open time: ", maybe "N/A" (formatDiffTime . arOpenDuration) $ prgAverageResult prGroup
-    , " (ignoring weekends: ", maybe "N/A" (formatDiffTime . arOpenWorkDuration) $ prgAverageResult prGroup, ")"
-    , "; avg draft duration (ignoring weekends): ", maybe "0" formatDiffTime $ prgAverageWorkDraftDuration prGroup
-    , "; avg latency of our first review (ignoring weekends): ", maybe "N/A" (formatDiffTime . grWorkLatency) $ prgAverageOurFirstReview prGroup
-    , ", reviewers: ", maybe "none" (T.unpack . describeReviewActors . grActors) $ prgAverageOurFirstReview prGroup
-    , "; avg latency of their first review (ignoring weekends): ", maybe "N/A" (formatDiffTime . grWorkLatency) $ prgAverageTheirFirstReview prGroup
-    , ", reviewers: ", maybe "none" (T.unpack . describeReviewActors . grActors) $ prgAverageTheirFirstReview prGroup
-    ]
+  reportTexts <- forM bySprint $ \sprint -> do
+    saveSprintFile sprint
+    pure $ sprintReport today sprint
+  T.writeFile "report.adoc" $ reportHeader config today <> T.unlines reportTexts
 
 saveSprintFile :: (Sprint, [PullAnalysis]) -> IO ()
 saveSprintFile (sprint, prs) = do
