@@ -8,6 +8,7 @@ import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.Environment (getArgs)
 import System.Exit (die)
 import System.FilePath ((</>))
+import qualified Data.Bifunctor (second)
 import qualified Data.ByteString.Lazy as BL (writeFile)
 import qualified Data.Text as T
 import qualified Data.Text.IO as T (writeFile)
@@ -45,7 +46,7 @@ run (Run offline) = do
   today <- utctDay <$> getCurrentTime
   reportTexts <- forM bySprint $ \sprint -> do
     saveSprintFile sprint
-    pure $ sprintReport today sprint
+    pure $ sprintReport today $ Data.Bifunctor.second averageWorkOpenTime sprint
   T.writeFile "report.adoc" $ reportHeader config today <> T.unlines reportTexts
 
 saveSprintFile :: (Sprint, [PullAnalysis]) -> IO ()

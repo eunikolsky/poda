@@ -9,8 +9,8 @@ import qualified Data.Text as T
 
 import Lib
 
-sprintReport :: Day -> (Sprint, [PullAnalysis]) -> T.Text
-sprintReport today (period, prs) = let prGroup = averageWorkOpenTime prs in
+sprintReport :: Day -> (Sprint, PRGroup) -> T.Text
+sprintReport today (period, prGroup) =
   T.unlines $ map (T.pack . concat)
     -- TODO use Builder
     [ [ "== Sprint *", show period, "*"
