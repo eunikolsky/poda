@@ -1,5 +1,6 @@
 module Asciidoc
   ( reportHeader
+  , reportImage
   , sprintReport
   ) where
 
@@ -44,5 +45,12 @@ reportHeader config today = T.intercalate "\n\n" $ map (T.pack . concat)
     , ". All other reviewers are called _their_ reviewers below."
     ]
   , [ "*All times are work times (that is, ignoring weekends)!*" ]
+  ]
+
+reportImage :: (FilePath, T.Text) -> T.Text
+reportImage (file, title) = T.intercalate "\n" $ map (T.pack . concat)
+  [ [ "== Graph" ]
   , [ "" ]
+  , [ ".", T.unpack title ]
+  , [ "image::", file, "[]" ]
   ]

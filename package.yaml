@@ -40,11 +40,13 @@ library:
   - http-client
   - http-client-tls
   - http-types
+  - matplotlib
   - mtl
   - persistent
   - persistent-sqlite
   - text
   - time
+  - unicode-show
   - unordered-containers
 
 executables:
