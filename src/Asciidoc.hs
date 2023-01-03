@@ -1,5 +1,6 @@
 module Asciidoc
   ( reportHeader
+  , reportImage
   , sprintReport
   ) where
 
@@ -9,8 +10,8 @@ import qualified Data.Text as T
 
 import Lib
 
-sprintReport :: Day -> (Sprint, [PullAnalysis]) -> T.Text
-sprintReport today (period, prs) = let prGroup = averageWorkOpenTime prs in
+sprintReport :: Day -> (Sprint, PRGroup) -> T.Text
+sprintReport today (period, prGroup) =
   T.unlines $ map (T.pack . concat)
     -- TODO use Builder
     [ [ "== Sprint *", show period, "*"
@@ -44,5 +45,12 @@ reportHeader config today = T.intercalate "\n\n" $ map (T.pack . concat)
     , ". All other reviewers are called _their_ reviewers below."
     ]
   , [ "*All times are work times (that is, ignoring weekends)!*" ]
+  ]
+
+reportImage :: (FilePath, T.Text) -> T.Text
+reportImage (file, title) = T.intercalate "\n" $ map (T.pack . concat)
+  [ [ "== Graph" ]
   , [ "" ]
+  , [ ".", T.unpack title ]
+  , [ "image::", file, "[]" ]
   ]

@@ -8,12 +8,14 @@ import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.Environment (getArgs)
 import System.Exit (die)
 import System.FilePath ((</>))
+import qualified Data.Bifunctor (second)
 import qualified Data.ByteString.Lazy as BL (writeFile)
 import qualified Data.Text as T
 import qualified Data.Text.IO as T (writeFile)
 
 import Asciidoc
 import Database
+import Graph
 import Lib
 
 main :: IO ()
@@ -43,10 +45,22 @@ run (Run offline) = do
   BL.writeFile "pulls.csv" $ encodeDefaultOrderedByName a
   let bySprint = reverse $ groupBySprint (Sprint $ configFirstSprintStart config) a
   today <- utctDay <$> getCurrentTime
-  reportTexts <- forM bySprint $ \sprint -> do
+  (reportTexts, openTimes) <- fmap untuples . forM bySprint $ \sprint -> do
     saveSprintFile sprint
-    pure $ sprintReport today sprint
-  T.writeFile "report.adoc" $ reportHeader config today <> T.unlines reportTexts
+    let prGroup = Data.Bifunctor.second averageWorkOpenTime sprint
+    let openTime = Data.Bifunctor.second (maybe 0 arOpenWorkDuration . prgAverageResult) prGroup
+    pure (sprintReport today prGroup, openTime)
+
+  let imgFile = "out/opentimes.png"
+  plotOpenTimes imgFile $ reverse openTimes
+  T.writeFile "report.adoc" . T.intercalate "\n\n" $
+    [ reportHeader config today
+    , reportImage (imgFile, "Average open times")
+    , T.unlines reportTexts
+    ]
+
+untuples :: [(a, b)] -> ([a], [b])
+untuples xs = (fst <$> xs, snd <$> xs)
 
 saveSprintFile :: (Sprint, [PullAnalysis]) -> IO ()
 saveSprintFile (sprint, prs) = do

@@ -31,6 +31,7 @@ library
       Concurrency
       Database
       EventType
+      Graph
       Lib
       WorkDiffTime
   other-modules:
@@ -51,11 +52,13 @@ library
     , http-client
     , http-client-tls
     , http-types
+    , matplotlib
     , mtl
     , persistent
     , persistent-sqlite
     , text
     , time
+    , unicode-show
     , unordered-containers
   default-language: Haskell2010
 

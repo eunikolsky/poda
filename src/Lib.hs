@@ -509,7 +509,7 @@ groupBySprint :: Sprint -> [PullAnalysis] -> [(Sprint, [PullAnalysis])]
 groupBySprint firstSprint prs = (\s -> (s, filter (inSprint s . prDay) prs)) <$> allSprints
   where
     newestPR = prDay . maximumBy (compare `on` pullCreated . pullAnalysisPull) $ prs
-    allSprints = takeWhile (\(Sprint d) -> d < newestPR) $ iterate nextSprint firstSprint
+    allSprints = takeWhile (\(Sprint d) -> d <= newestPR) $ iterate nextSprint firstSprint
     prDay = utctDay . pullCreated . pullAnalysisPull
 
 -- | Shows review actors as a user-readable text, sorted by descending number of
