@@ -33,6 +33,9 @@ parseArgs = do
     [] -> Run (Offline False)
     _ -> error "Unknown arguments"
 
+outDir :: FilePath
+outDir = "out"
+
 run :: Action -> IO ()
 run DropDerivedTables = dropDerivedTables
 run (Run offline) = do
@@ -42,7 +45,9 @@ run (Run offline) = do
     Offline True -> listLocalPRs
   let a = fmap (analyze config) pulls
 
-  BL.writeFile "pulls.csv" $ encodeDefaultOrderedByName a
+  createDirectoryIfMissing False outDir
+
+  BL.writeFile (outDir </> "pulls.csv") $ encodeDefaultOrderedByName a
   let bySprint = reverse $ groupBySprint (Sprint $ configFirstSprintStart config) a
   today <- utctDay <$> getCurrentTime
   (reportTexts, openTimes) <- fmap untuples . forM bySprint $ \sprint -> do
@@ -51,9 +56,9 @@ run (Run offline) = do
     let openTime = Data.Bifunctor.second (maybe 0 arOpenWorkDuration . prgAverageResult) prGroup
     pure (sprintReport today prGroup, openTime)
 
-  let imgFile = "out/opentimes.png"
-  plotOpenTimes imgFile $ reverse openTimes
-  T.writeFile "report.adoc" . T.intercalate "\n\n" $
+  let imgFile = "opentimes.png"
+  plotOpenTimes (outDir </> imgFile) $ reverse openTimes
+  T.writeFile (outDir </> "report.adoc") . T.intercalate "\n\n" $
     [ reportHeader config today
     , reportImage (imgFile, "Average open times")
     , T.unlines reportTexts
@@ -64,8 +69,6 @@ untuples xs = (fst <$> xs, snd <$> xs)
 
 saveSprintFile :: (Sprint, [PullAnalysis]) -> IO ()
 saveSprintFile (sprint, prs) = do
-  let outDir = "out"
-  createDirectoryIfMissing False outDir
   BL.writeFile (outDir </> sprintFilename sprint <> ".csv") $ encodeDefaultOrderedByName prs
 
 loadConfig :: IO Config
