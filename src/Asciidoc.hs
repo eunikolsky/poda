@@ -7,6 +7,7 @@ module Asciidoc
 import Data.List
 import Data.Time.Calendar (Day)
 import qualified Data.Text as T
+import Text.Printf (printf)
 
 import Lib
 
@@ -19,7 +20,11 @@ sprintReport today (period, prGroup) =
       ]
     , [""]
     , [ "* ", show $ prgPRCount prGroup, " PRs, of them: "
-      , show $ prgMergedPRCount prGroup, " merged PRs"
+      , show $ prgMergedPRCount prGroup, " merged PRs ("
+      , if lowPercentMerged then "*" else ""
+      , printf "%0.2f%%" percentMerged
+      , if lowPercentMerged then "*" else ""
+      , ")"
       ]
     , [ "* average open time: *", maybe "N/A" (formatDiffTime . arOpenWorkDuration) $ prgAverageResult prGroup, "*" ]
     , [ "* average _draft_ duration: *", maybe "0" formatDiffTime $ prgAverageWorkDraftDuration prGroup, "*" ]
@@ -34,6 +39,10 @@ sprintReport today (period, prGroup) =
       , maybe "none" (T.unpack . describeReviewActors . grActors) $ prgAverageTheirFirstReview prGroup
       ]
     ]
+  where
+    percentMerged :: Double
+    percentMerged = (fromIntegral (prgMergedPRCount prGroup) / fromIntegral (prgPRCount prGroup)) * 100.0
+    lowPercentMerged = percentMerged <= 50
 
 reportHeader :: Config -> Day -> T.Text
 reportHeader config today = T.intercalate "\n\n" $ map (T.pack . concat)
