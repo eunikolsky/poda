@@ -50,17 +50,24 @@ run (Run offline) = do
   BL.writeFile (outDir </> "pulls.csv") $ encodeDefaultOrderedByName a
   let bySprint = reverse $ groupBySprint (Sprint $ configFirstSprintStart config) a
   today <- utctDay <$> getCurrentTime
-  (reportTexts, openTimes) <- fmap untuples . forM bySprint $ \sprint -> do
+  (reportTexts, _data) <- fmap untuples . forM bySprint $ \sprint -> do
     saveSprintFile sprint
     let prGroup = Data.Bifunctor.second averageWorkOpenTime sprint
-    let openTime = Data.Bifunctor.second (maybe 0 arOpenWorkDuration . prgAverageResult) prGroup
-    pure (sprintReport today prGroup, openTime)
+        openTime = Data.Bifunctor.second (maybe 0 arOpenWorkDuration . prgAverageResult) prGroup
+        prCount = Data.Bifunctor.second prgPRCount prGroup
+    pure (sprintReport today prGroup, (openTime, prCount))
 
-  let imgFile = "opentimes.png"
-  plotOpenTimes (outDir </> imgFile) $ reverse openTimes
+  let (openTimes, prCounts) = untuples _data
+  let openTimesFile = "opentimes.png"
+      prCountFile = "prcount.png"
+  plotOpenTimes (outDir </> openTimesFile) $ reverse openTimes
+  plotPRCount (outDir </> prCountFile) $ reverse prCounts
   T.writeFile (outDir </> "report.adoc") . T.intercalate "\n\n" $
     [ reportHeader config today
-    , reportImage (imgFile, "Average open times")
+    , reportImages
+      [ (openTimesFile, "Average open times")
+      , (prCountFile, "PR count")
+      ]
     , T.unlines reportTexts
     ]
 
