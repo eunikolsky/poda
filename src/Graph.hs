@@ -17,23 +17,19 @@ import Lib
 
 plotOpenTimes :: FilePath -> [(Sprint, NominalDiffTime)] -> IO ()
 plotOpenTimes filepath times = logResult <=< file filepath
-  . setFigureSize . texts . setTicks times $ plot (enumFromTo 0 $ length times - 1) (snd <$> times)
-
-  where
-    texts p = foldl'
-      (\p' (idx, (_, dur)) -> p' # ";plot.text(" # idx # ", " # (floor $ realToFrac dur :: Int) # ", " # str (" " <> formatDiffTime dur) # ", ha='center', rotation='vertical')")
-      p
-      (indexed times)
+  . setFigureSize . texts (floor . realToFrac) formatDiffTime times . setTicks times
+  $ plot (enumFromTo 0 $ length times - 1) (snd <$> times)
 
 plotPRCount :: FilePath -> [(Sprint, Int)] -> IO ()
 plotPRCount filepath counts = logResult <=< file filepath
-  . setFigureSize . texts . setTicks counts $ plot (enumFromTo 0 $ length counts - 1) (snd <$> counts)
+  . setFigureSize . texts id show counts . setTicks counts
+  $ plot (enumFromTo 0 $ length counts - 1) (snd <$> counts)
 
-  where
-    texts p = foldl'
-      (\p' (idx, (_, count)) -> p' # ";plot.text(" # idx # ", " # count # ", " # str (" " <> show count) # ", ha='center', rotation='vertical')")
-      p
-      (indexed counts)
+texts :: (b -> Int) -> (b -> String) -> [(a, b)] -> Matplotlib -> Matplotlib
+texts yvalfun labelfun counts p = foldl'
+  (\p' (idx, (_, count)) -> p' # ";plot.text(" # idx # ", " # yvalfun count # ", " # str (" " <> labelfun count) # ", ha='center', rotation='vertical')")
+  p
+  (indexed counts)
 
 logResult :: Either String String -> IO ()
 logResult = either (hPutStrLn stderr) (\s -> unless (null s) $ putStrLn s)
