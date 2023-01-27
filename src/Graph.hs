@@ -17,15 +17,9 @@ import Lib
 
 plotOpenTimes :: FilePath -> [(Sprint, NominalDiffTime)] -> IO ()
 plotOpenTimes filepath times = logResult <=< file filepath
-  . setFigureSize . texts . setTicks $ plot (enumFromTo 0 $ length times - 1) (snd <$> times)
+  . setFigureSize . texts . setTicks times $ plot (enumFromTo 0 $ length times - 1) (snd <$> times)
 
   where
-    setTicks p = p # ";f=plot.gca();f.axes.xaxis.set_ticks(" # ticks # ", labels=[" # labels # "], rotation=10);f.axes.yaxis.set_ticklabels([])"
-      where
-        majorTicks = reverse . takeEvery 5 . reverse $ indexed times
-        ticks = fst <$> majorTicks
-        labels = fmap (ushow . show . fst . snd) majorTicks
-
     texts p = foldl'
       (\p' (idx, (_, dur)) -> p' # ";plot.text(" # idx # ", " # (floor $ realToFrac dur :: Int) # ", " # str (" " <> formatDiffTime dur) # ", ha='center', rotation='vertical')")
       p
@@ -33,15 +27,9 @@ plotOpenTimes filepath times = logResult <=< file filepath
 
 plotPRCount :: FilePath -> [(Sprint, Int)] -> IO ()
 plotPRCount filepath counts = logResult <=< file filepath
-  . setFigureSize . texts . setTicks $ plot (enumFromTo 0 $ length counts - 1) (snd <$> counts)
+  . setFigureSize . texts . setTicks counts $ plot (enumFromTo 0 $ length counts - 1) (snd <$> counts)
 
   where
-    setTicks p = p # ";f=plot.gca();f.axes.xaxis.set_ticks(" # ticks # ", labels=[" # labels # "], rotation=10);f.axes.yaxis.set_ticklabels([])"
-      where
-        majorTicks = reverse . takeEvery 5 . reverse $ indexed counts
-        ticks = fst <$> majorTicks
-        labels = fmap (ushow . show . fst . snd) majorTicks
-
     texts p = foldl'
       (\p' (idx, (_, count)) -> p' # ";plot.text(" # idx # ", " # count # ", " # str (" " <> show count) # ", ha='center', rotation='vertical')")
       p
@@ -49,6 +37,13 @@ plotPRCount filepath counts = logResult <=< file filepath
 
 logResult :: Either String String -> IO ()
 logResult = either (hPutStrLn stderr) (\s -> unless (null s) $ putStrLn s)
+
+setTicks :: [(Sprint, a)] -> Matplotlib -> Matplotlib
+setTicks counts p = p # ";f=plot.gca();f.axes.xaxis.set_ticks(" # ticks # ", labels=[" # labels # "], rotation=10);f.axes.yaxis.set_ticklabels([])"
+  where
+    majorTicks = reverse . takeEvery 5 . reverse $ indexed counts
+    ticks = fst <$> majorTicks
+    labels = fmap (ushow . show . fst . snd) majorTicks
 
 setFigureSize :: Matplotlib -> Matplotlib
 -- setting dpi doesn't work at all; setting figsize globally via `setParameter` doesn't work
