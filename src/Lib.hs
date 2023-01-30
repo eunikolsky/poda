@@ -1,5 +1,6 @@
 {-# OPTIONS_GHC -Wno-orphans -Werror=missing-fields -Werror=missing-methods #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -505,8 +506,11 @@ inSprint (Sprint d) day = day >= d && day <= addDays 13 d
 sprintFilename :: Sprint -> String
 sprintFilename (Sprint d) = mconcat [show d, "-", show $ addDays 13 d]
 
-groupBySprint :: Sprint -> [PullAnalysis] -> [(Sprint, [PullAnalysis])]
-groupBySprint firstSprint prs = (\s -> (s, filter (inSprint s . prDay) prs)) <$> allSprints
+newtype SprintGrouped a = SprintGrouped { fromSprintGrouped :: (Sprint, a) }
+  deriving Functor
+
+groupBySprint :: Sprint -> [PullAnalysis] -> [SprintGrouped [PullAnalysis]]
+groupBySprint firstSprint prs = (\s -> SprintGrouped (s, filter (inSprint s . prDay) prs)) <$> allSprints
   where
     newestPR = prDay . maximumBy (compare `on` pullCreated . pullAnalysisPull) $ prs
     allSprints = takeWhile (\(Sprint d) -> d <= newestPR) $ iterate nextSprint firstSprint

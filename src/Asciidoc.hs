@@ -11,8 +11,8 @@ import Text.Printf (printf)
 
 import Lib
 
-sprintReport :: Day -> (Sprint, PRGroup) -> T.Text
-sprintReport today (period, prGroup) =
+sprintReport :: Day -> SprintGrouped PRGroup -> T.Text
+sprintReport today (SprintGrouped (period, prGroup)) =
   T.unlines $ map (T.pack . concat)
     -- TODO use Builder
     [ [ "== Sprint *", show period, "*"

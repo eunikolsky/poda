@@ -1,6 +1,6 @@
 module Main where
 
-import Control.Monad (forM, unless)
+import Control.Monad (forM, forM_, unless)
 import Data.Aeson (eitherDecodeFileStrict')
 import Data.Csv (encodeDefaultOrderedByName)
 import Data.Time.Clock (getCurrentTime, utctDay)
@@ -8,7 +8,6 @@ import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.Environment (getArgs)
 import System.Exit (die)
 import System.FilePath ((</>))
-import qualified Data.Bifunctor (second)
 import qualified Data.ByteString.Lazy as BL (writeFile)
 import qualified Data.Text as T
 import qualified Data.Text.IO as T (writeFile)
@@ -49,12 +48,14 @@ run (Run offline) = do
 
   BL.writeFile (outDir </> "pulls.csv") $ encodeDefaultOrderedByName a
   let bySprint = reverse $ groupBySprint (Sprint $ configFirstSprintStart config) a
+
+  forM_ bySprint saveSprintFile
+
   today <- utctDay <$> getCurrentTime
-  (reportTexts, _data) <- fmap untuples . forM bySprint $ \sprint -> do
-    saveSprintFile sprint
-    let prGroup = Data.Bifunctor.second averageWorkOpenTime sprint
-        openTime = Data.Bifunctor.second (maybe 0 arOpenWorkDuration . prgAverageResult) prGroup
-        prCount = Data.Bifunctor.second prgPRCount prGroup
+  let prGroups = fmap averageWorkOpenTime <$> bySprint
+  (reportTexts, _data) <- fmap untuples . forM prGroups $ \prGroup -> do
+    let openTime = maybe 0 arOpenWorkDuration . prgAverageResult <$> prGroup
+        prCount = prgPRCount <$> prGroup
     pure (sprintReport today prGroup, (openTime, prCount))
 
   let (openTimes, prCounts) = untuples _data
@@ -74,8 +75,8 @@ run (Run offline) = do
 untuples :: [(a, b)] -> ([a], [b])
 untuples xs = (fst <$> xs, snd <$> xs)
 
-saveSprintFile :: (Sprint, [PullAnalysis]) -> IO ()
-saveSprintFile (sprint, prs) = do
+saveSprintFile :: SprintGrouped [PullAnalysis] -> IO ()
+saveSprintFile (SprintGrouped (sprint, prs)) = do
   BL.writeFile (outDir </> sprintFilename sprint <> ".csv") $ encodeDefaultOrderedByName prs
 
 loadConfig :: IO Config

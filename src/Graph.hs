@@ -16,16 +16,16 @@ import Text.Show.Unicode
 
 import Lib
 
-plotGraph :: ToJSON a => (a -> Int) -> (a -> String) -> FilePath -> [(Sprint, a)] -> IO ()
+plotGraph :: ToJSON a => (a -> Int) -> (a -> String) -> FilePath -> [SprintGrouped a] -> IO ()
 plotGraph yvalfun labelfun filepath valuesBySprint = logResult <=< file filepath
   . setFigureSize . texts yvalfun labelfun values . setTicks valuesBySprint
   $ plot (enumFromTo 0 $ length valuesBySprint - 1) values
-  where values = snd <$> valuesBySprint
+  where values = snd . fromSprintGrouped <$> valuesBySprint
 
-plotOpenTimes :: FilePath -> [(Sprint, NominalDiffTime)] -> IO ()
+plotOpenTimes :: FilePath -> [SprintGrouped NominalDiffTime] -> IO ()
 plotOpenTimes = plotGraph (floor . realToFrac) formatDiffTime
 
-plotPRCount :: FilePath -> [(Sprint, Int)] -> IO ()
+plotPRCount :: FilePath -> [SprintGrouped Int] -> IO ()
 plotPRCount = plotGraph id show
 
 texts :: (a -> Int) -> (a -> String) -> [a] -> Matplotlib -> Matplotlib
@@ -37,10 +37,10 @@ texts yvalfun labelfun counts p = foldl'
 logResult :: Either String String -> IO ()
 logResult = either (hPutStrLn stderr) (\s -> unless (null s) $ putStrLn s)
 
-setTicks :: [(Sprint, a)] -> Matplotlib -> Matplotlib
+setTicks :: [SprintGrouped a] -> Matplotlib -> Matplotlib
 setTicks counts p = p # ";f=plot.gca();f.axes.xaxis.set_ticks(" # ticks # ", labels=[" # labels # "], rotation=10);f.axes.yaxis.set_ticklabels([])"
   where
-    majorTicks = reverse . takeEvery 5 . reverse $ indexed counts
+    majorTicks = reverse . takeEvery 5 . reverse . indexed . fmap fromSprintGrouped $ counts
     ticks = fst <$> majorTicks
     labels = fmap (ushow . show . fst . snd) majorTicks
 
