@@ -7,6 +7,7 @@ module Graph
   ) where
 
 import Control.Monad
+import Data.Aeson
 import Data.List
 import Data.Time.Clock
 import Graphics.Matplotlib
@@ -15,15 +16,16 @@ import Text.Show.Unicode
 
 import Lib
 
+plotGraph :: ToJSON a => (a -> Int) -> (a -> String) -> FilePath -> [(Sprint, a)] -> IO ()
+plotGraph yvalfun labelfun filepath valuesBySprint = logResult <=< file filepath
+  . setFigureSize . texts yvalfun labelfun valuesBySprint . setTicks valuesBySprint
+  $ plot (enumFromTo 0 $ length valuesBySprint - 1) (snd <$> valuesBySprint)
+
 plotOpenTimes :: FilePath -> [(Sprint, NominalDiffTime)] -> IO ()
-plotOpenTimes filepath times = logResult <=< file filepath
-  . setFigureSize . texts (floor . realToFrac) formatDiffTime times . setTicks times
-  $ plot (enumFromTo 0 $ length times - 1) (snd <$> times)
+plotOpenTimes = plotGraph (floor . realToFrac) formatDiffTime
 
 plotPRCount :: FilePath -> [(Sprint, Int)] -> IO ()
-plotPRCount filepath counts = logResult <=< file filepath
-  . setFigureSize . texts id show counts . setTicks counts
-  $ plot (enumFromTo 0 $ length counts - 1) (snd <$> counts)
+plotPRCount = plotGraph id show
 
 texts :: (b -> Int) -> (b -> String) -> [(a, b)] -> Matplotlib -> Matplotlib
 texts yvalfun labelfun counts p = foldl'
