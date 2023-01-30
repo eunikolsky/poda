@@ -18,8 +18,9 @@ import Lib
 
 plotGraph :: ToJSON a => (a -> Int) -> (a -> String) -> FilePath -> [(Sprint, a)] -> IO ()
 plotGraph yvalfun labelfun filepath valuesBySprint = logResult <=< file filepath
-  . setFigureSize . texts yvalfun labelfun valuesBySprint . setTicks valuesBySprint
-  $ plot (enumFromTo 0 $ length valuesBySprint - 1) (snd <$> valuesBySprint)
+  . setFigureSize . texts yvalfun labelfun values . setTicks valuesBySprint
+  $ plot (enumFromTo 0 $ length valuesBySprint - 1) values
+  where values = snd <$> valuesBySprint
 
 plotOpenTimes :: FilePath -> [(Sprint, NominalDiffTime)] -> IO ()
 plotOpenTimes = plotGraph (floor . realToFrac) formatDiffTime
@@ -27,9 +28,9 @@ plotOpenTimes = plotGraph (floor . realToFrac) formatDiffTime
 plotPRCount :: FilePath -> [(Sprint, Int)] -> IO ()
 plotPRCount = plotGraph id show
 
-texts :: (b -> Int) -> (b -> String) -> [(a, b)] -> Matplotlib -> Matplotlib
+texts :: (a -> Int) -> (a -> String) -> [a] -> Matplotlib -> Matplotlib
 texts yvalfun labelfun counts p = foldl'
-  (\p' (idx, (_, count)) -> p' # ";plot.text(" # idx # ", " # yvalfun count # ", " # str (" " <> labelfun count) # ", ha='center', rotation='vertical')")
+  (\p' (idx, count) -> p' # ";plot.text(" # idx # ", " # yvalfun count # ", " # str (" " <> labelfun count) # ", ha='center', rotation='vertical')")
   p
   (indexed counts)
 
