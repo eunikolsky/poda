@@ -209,7 +209,7 @@ listLocalPRs = do
         mempty
         pullEvents
 
-  pure $ HM.foldMapWithKey
+  pure . sortMPullByRepoAndNumberDesc $ HM.foldMapWithKey
     (\pullId pull -> [MPull {mpPull=pull, mpEvents=maybe mempty sortPREvents $ eventsMap HM.!? pullId}])
     pullMap
 
@@ -268,6 +268,10 @@ listPRs config = displayConsoleRegions $ do
 
 sortByRepoAndNumberDesc :: [Pull] -> [Pull]
 sortByRepoAndNumberDesc = sortOn (\Pull{..} -> (pullRepo, Data.Ord.Down pullNumber))
+
+-- FIXME remove duplication with `sortByRepoAndNumberDesc`
+sortMPullByRepoAndNumberDesc :: [MPull] -> [MPull]
+sortMPullByRepoAndNumberDesc = sortOn (\(MPull Pull{..} _) -> (pullRepo, Data.Ord.Down pullNumber))
 
 -- FIXME I hate how I have to pass Key separately because it's required by PullEvent;
 -- on the other hand, Pull as is doesn't know its events…
